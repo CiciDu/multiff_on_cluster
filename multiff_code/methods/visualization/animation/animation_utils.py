@@ -453,15 +453,16 @@ def plot_visible_ff_reward_boundary_for_animation(visible_ffs, ax, reward_bounda
 
         for k in range(len(visible_ffs)):
             if not visible_ffs['pose_unreliable'].iloc[k]:
+                edgecolor = 'red' if visible_ffs['visible'].iloc[k] else 'gray'
                 circle = plt.Circle((visible_ffs[ff_x_column].iloc[k], visible_ffs[ff_y_column].iloc[k]),
-                                    reward_boundary_radius, facecolor='yellow', edgecolor='gray', alpha=0.7, zorder=1)
+                                    reward_boundary_radius, facecolor='yellow', edgecolor=edgecolor, alpha=0.7, zorder=1)
                 ax.add_patch(circle)
                 circle = plt.Circle((visible_ffs[ff_x_noisy_column].iloc[k], visible_ffs[ff_y_noisy_column].iloc[k]),
-                                    reward_boundary_radius, facecolor='gray', edgecolor='gray', alpha=0.5, zorder=1)
+                                    reward_boundary_radius, facecolor='gray', edgecolor=edgecolor, alpha=0.5, zorder=1)
                 ax.add_patch(circle)
             else:
                 circle = plt.Circle((visible_ffs[ff_x_column].iloc[k], visible_ffs[ff_y_column].iloc[k]),
-                                    reward_boundary_radius, facecolor='gray', edgecolor='gray', alpha=0.7, zorder=1)
+                                    reward_boundary_radius, facecolor='black', edgecolor='black', alpha=0.7, zorder=1)
                 ax.add_patch(circle)
     else:
         # plot the real positions only

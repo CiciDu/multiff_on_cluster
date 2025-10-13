@@ -8,6 +8,7 @@ from decision_making_analysis.compare_GUAT_and_TAFT import find_GUAT_or_TAFT_tri
 
 
 import time as time_package
+import json
 import os
 import numpy as np
 import pandas as pd
@@ -70,7 +71,11 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self.get_related_folder_names_from_model_folder_name(
             self.model_folder_name, data_name=data_name)
 
+        # Per-agent best-after-curriculum directory under the agent folder
         self.best_model_after_curriculum_dir_name = os.path.join(
+            self.model_folder_name, 'best_model_after_curriculum')
+        # Legacy location kept for backward-compat loading fallback
+        self.legacy_best_model_after_curriculum_dir_name = os.path.join(
             self.overall_folder, 'best_model_after_curriculum')
 
     def get_related_folder_names_from_model_folder_name(self, model_folder_name, data_name='data_0'):
@@ -89,6 +94,25 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         os.makedirs(self.planning_data_folder_path, exist_ok=True)
         os.makedirs(self.patterns_and_features_folder_path, exist_ok=True)
         os.makedirs(self.decision_making_folder_path, exist_ok=True)
+
+    def resolve_best_model_after_curriculum_dir(self, ensure_exists=False):
+        """
+        Prefer per-agent folder at `model_folder_name/best_model_after_curriculum`.
+        Fall back to legacy `overall_folder/best_model_after_curriculum` if it exists.
+        Optionally ensure the resolved folder exists.
+        """
+        preferred = self.best_model_after_curriculum_dir_name
+        legacy = self.legacy_best_model_after_curriculum_dir_name
+
+        # Use preferred if it already exists or legacy does not
+        if os.path.isdir(preferred) or not os.path.isdir(legacy):
+            resolved = preferred
+        else:
+            resolved = legacy
+
+        if ensure_exists:
+            os.makedirs(resolved, exist_ok=True)
+        return resolved
 
     def get_current_info_condition(self, df):
         minimal_current_info = self.get_minimum_current_info()
@@ -121,6 +145,27 @@ class _RLforMultifirefly(animation_class.AnimationClass):
 
         return self.env_kwargs
 
+    # -------- Unified checkpoint manifest utilities --------
+    def _checkpoint_manifest_path(self, checkpoint_dir):
+        return os.path.join(checkpoint_dir, 'checkpoint_manifest.json')
+
+    def write_checkpoint_manifest(self, checkpoint_dir, payload):
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        manifest_path = self._checkpoint_manifest_path(checkpoint_dir)
+        try:
+            with open(manifest_path, 'w') as f:
+                json.dump(payload, f, indent=2, default=str)
+        except Exception as e:
+            print(f"Warning: failed to write manifest at {manifest_path}: {e}")
+
+    def read_checkpoint_manifest(self, checkpoint_dir):
+        manifest_path = self._checkpoint_manifest_path(checkpoint_dir)
+        try:
+            with open(manifest_path, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return None
+
     def curriculum_training(self, best_model_after_curriculum_exists_ok=True, load_replay_buffer_of_best_model_after_curriculum=True):
         try:
             if not best_model_after_curriculum_exists_ok:
@@ -134,8 +179,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self._run_current_agent_after_curriculum_training()
 
     def _progress_in_curriculum(self):
-
-        os.makedirs(self.best_model_after_curriculum_dir_name, exist_ok=True)
+        self.resolve_best_model_after_curriculum_dir(ensure_exists=True)
         self.original_agent_id = self.agent_id
         self.agent_id = 'no_cost'
         print('Starting curriculum training')
@@ -146,7 +190,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self._use_while_loop_for_curriculum_training()
         self._further_process_best_model_after_curriculum_training()
         self.streamline_making_animation(currentTrial_for_animation=None, num_trials_for_animation=None, duration=[10, 40], n_steps=8000,
-                                         video_dir=self.best_model_after_curriculum_dir_name)
+                                         video_dir=self.resolve_best_model_after_curriculum_dir(ensure_exists=True))
         self.agent_id = self.original_agent_id
 
     def _make_initial_env_for_curriculum_training(self, initial_dt=0.1, initial_angular_terminal_vel=0.32):

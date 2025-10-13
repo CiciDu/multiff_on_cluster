@@ -82,13 +82,16 @@ class LSTMforMultifirefly(rl_for_multiff_class._RLforMultifirefly):
         self.agent_params['replay_buffer'] = self.replay_buffer
         self.sac_model = LSTM_functions.SAC_Trainer(**self.agent_params)
 
-    def make_initial_env_for_curriculum_training(self, initial_dt=0.1, initial_flash_on_interval=3, initial_angular_terminal_vel=0.64):
+    def make_initial_env_for_curriculum_training(self, initial_dt=0.1, initial_flash_on_interval=3, initial_angular_terminal_vel=0.64, initial_reward_boundary=75):
         self.make_env()
         self._make_initial_env_for_curriculum_training(initial_dt=initial_dt,
                                                          initial_angular_terminal_vel=initial_angular_terminal_vel)
         self.env.angular_terminal_vel = initial_angular_terminal_vel
         self._update_env_flash_on_interval(
             flash_on_interval=initial_flash_on_interval)
+        # optionally relax reward boundary to densify rewards at start
+        if initial_reward_boundary is not None:
+            self._update_env_reward_boundary(reward_boundary=initial_reward_boundary)
 
     def _make_agent_for_curriculum_training(self):
         self.make_agent()
@@ -103,6 +106,11 @@ class LSTMforMultifirefly(rl_for_multiff_class._RLforMultifirefly):
         self.env.flash_on_interval = flash_on_interval
         self.env_kwargs_for_curriculum_training['flash_on_interval'] = flash_on_interval
 
+    def _update_env_reward_boundary(self, reward_boundary=25):
+        # base_env.MultiFF exposes `reward_boundary`
+        self.env.reward_boundary = reward_boundary
+        self.env_kwargs_for_curriculum_training['reward_boundary'] = reward_boundary
+
     def _change_env_after_meeting_reward_threshold(self):
         flash_on_interval = max(
             self.env.flash_on_interval - 0.3, self.env_kwargs['flash_on_interval'])
@@ -110,18 +118,24 @@ class LSTMforMultifirefly(rl_for_multiff_class._RLforMultifirefly):
         # self._update_env_dt(dt=max(self.env.dt/2, 0.1))
         self.env.angular_terminal_vel = max(self.env.angular_terminal_vel/4, 0.01)
         self.env.distance2center_cost = max(self.env.distance2center_cost - 0.5, 0)
+        # shrink reward boundary towards target in env_kwargs (harder over time)
+        if 'reward_boundary' in self.env_kwargs:
+            new_rb = max(self.env.reward_boundary - 25 , self.env_kwargs['reward_boundary'])
+            self._update_env_reward_boundary(reward_boundary=new_rb)
 
         print('Current dt:', self.env.dt)
         print('Current gamma:', self.sac_model.gamma)
         print('Current angular_terminal_vel:', self.env.angular_terminal_vel)
         print('Current flash_on_interval:', self.env.flash_on_interval)
         print('Current distance2center_cost:', self.env.distance2center_cost)
+        print('Current reward_boundary:', self.env.reward_boundary)
 
     def _use_while_loop_for_curriculum_training(self, eval_eps_freq=20):
         # while (self.env.dt > self.env_kwargs['dt']) | (self.env.angular_terminal_vel > 0.01) | \
         #     (self.env.flash_on_interval > self.env_kwargs['flash_on_interval']) | (self.env.distance2center_cost > 0):
 
-        while self.env.flash_on_interval > self.env_kwargs['flash_on_interval']:
+        while (self.env.flash_on_interval > self.env_kwargs['flash_on_interval']) or \
+              ('reward_boundary' in self.env_kwargs_for_curriculum_training and self.env.reward_boundary > self.env_kwargs['reward_boundary']):
 
             gc.collect()
             # Note: 0.00222 = 0.0035/(pi/2), same as the monkey's threshold
@@ -164,6 +178,9 @@ class LSTMforMultifirefly(rl_for_multiff_class._RLforMultifirefly):
         self._restore_env_params_after_curriculum_training()
         flash_on_interval = self.env_kwargs['flash_on_interval']
         self._update_env_flash_on_interval(flash_on_interval=flash_on_interval)
+        # restore reward boundary to final target
+        if 'reward_boundary' in self.env_kwargs:
+            self._update_env_reward_boundary(reward_boundary=self.env_kwargs['reward_boundary'])
         self.env.distance2center_cost = 0
         self.env_kwargs_for_curriculum_training['distance2center_cost'] = 0
 
@@ -174,6 +191,9 @@ class LSTMforMultifirefly(rl_for_multiff_class._RLforMultifirefly):
         self.env.dw_cost_factor = self.env_kwargs['dw_cost_factor']
         self.env.w_cost_factor = self.env_kwargs['w_cost_factor']
         self.env.distance2center_cost = 0
+        # keep reward boundary consistent
+        if 'reward_boundary' in self.env_kwargs:
+            self._update_env_reward_boundary(reward_boundary=self.env_kwargs['reward_boundary'])
 
     def _run_current_agent_after_curriculum_training(self):
 

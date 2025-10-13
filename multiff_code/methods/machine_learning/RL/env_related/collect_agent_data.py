@@ -71,7 +71,8 @@ def _collect_monkey_and_ff_data(env, sac_model, n_steps, LSTM, hidden_dim, deter
     """Core loop for collecting agent, monkey, and firefly data."""
     monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, time = ([] for _ in range(6))
     indexes_in_ff_flash, corresponding_time, ff_x_noisy, ff_y_noisy = ([] for _ in range(4))
-    pose_unreliable, time_since_last_vis_list, all_steps = ([] for _ in range(3))
+    pose_unreliable, visible, time_since_last_vis_list, all_steps = ([] for _ in range(4))
+    
 
     for step in range(n_steps):
         if step % 1000 == 0 and step != 0:
@@ -115,6 +116,7 @@ def _collect_monkey_and_ff_data(env, sac_model, n_steps, LSTM, hidden_dim, deter
             ff_x_noisy.extend(env.ffxy_topk_noisy[:, 0].tolist())
             ff_y_noisy.extend(env.ffxy_topk_noisy[:, 1].tolist())
             pose_unreliable.extend(env.pose_unreliable.tolist())
+            visible.extend(env.visible.tolist())
 
         if (LSTM and (terminated or truncated)) or (not LSTM and (terminated or truncated)):
             logging.info("Episode ended (terminated or truncated) by environment.")
@@ -123,7 +125,7 @@ def _collect_monkey_and_ff_data(env, sac_model, n_steps, LSTM, hidden_dim, deter
     return (
         monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, time,
         indexes_in_ff_flash, corresponding_time, ff_x_noisy, ff_y_noisy,
-        pose_unreliable, time_since_last_vis_list, all_steps
+        pose_unreliable, visible, time_since_last_vis_list, all_steps
     )
 
 
@@ -149,7 +151,7 @@ def collect_agent_data_func(env, sac_model, n_steps=15000, LSTM=False,
 
     (monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, time,
      indexes_in_ff_flash, corresponding_time, ff_x_noisy, ff_y_noisy,
-     pose_unreliable, time_since_last_vis_list, all_steps) = results
+     pose_unreliable, visible, time_since_last_vis_list, all_steps) = results
 
     # -----------------------------------------------------------------
     # ↓ Your downstream firefly + monkey data processing section ↓
@@ -161,6 +163,7 @@ def collect_agent_data_func(env, sac_model, n_steps=15000, LSTM=False,
         'ff_x_noisy': ff_x_noisy,
         'ff_y_noisy': ff_y_noisy,
         'pose_unreliable': pose_unreliable,
+        'visible': visible,
         'time_since_last_vis': time_since_last_vis_list
     })
 

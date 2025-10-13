@@ -16,7 +16,7 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 # ---- Tunables for transforms ----
 DEFAULT_D0 = 25.0      # anchor for d_log = log1p(dist/d0)
 CLIP_DMAX = 500.0      # clip distance before log
-TMAX_DEFAULT = 3.0     # seconds cap for t_seen normalization
+TMAX_DEFAULT = 5.0     # seconds cap for t_seen normalization
 
 
 @dataclass
@@ -79,6 +79,7 @@ class MultiFF(gymnasium.Env):
                  dw_cost_factor=10,
                  w_cost_factor=10,
                  distance2center_cost=0,
+                 reward_boundary=25,
                  add_cost_when_catching_ff_only=False,
                  linear_terminal_vel=0.01,
                  angular_terminal_vel=0.01,
@@ -174,10 +175,10 @@ class MultiFF(gymnasium.Env):
         self.wgain = pi / 2
         self.arena_radius = 1000
         self.ff_radius = 10
-        self.reward_boundary = 25
         self.invisible_angle = 2 * pi / 9
         self.epi_num = 0
         self.time = 0
+        self.reward_boundary = reward_boundary
         self.current_obs = np.zeros(self.obs_space_length, dtype=np.float32)
 
         # world state buffers (contiguous, float32)
@@ -235,6 +236,7 @@ class MultiFF(gymnasium.Env):
         print('current distance2center_cost: ', self.distance2center_cost)
         print('current flash_on_interval: ', self.flash_on_interval)
         print('current num_obs_ff: ', self.num_obs_ff)
+        print('current reward_boundary: ', self.reward_boundary)
         print('current max_in_memory_time: ', self.max_in_memory_time)
 
         # randomly generate the information of the fireflies
@@ -249,9 +251,6 @@ class MultiFF(gymnasium.Env):
                     flash_on_interval=self.flash_on_interval
                 )
             self._random_ff_positions(ff_index=np.arange(self.num_alive_ff))
-        # prev-obs snapshot starts empty; will be populated in beliefs()
-        self.ff_t_since_start_seen = np.zeros(
-            self.num_alive_ff, dtype=np.float32)
 
         # reset agent
         self.agentr = np.array([0.0], dtype=np.float32)
@@ -264,9 +263,24 @@ class MultiFF(gymnasium.Env):
         self.prev_w = self.w
         self.prev_v = self.v
 
-        # new trackers
+
+        # prev-obs snapshot starts empty; will be populated in beliefs()
+        # ff_t_since_start_seen: per-ff timer that accumulates WHILE the ff is visible.
+        # - Reset to 0 when the ff becomes invisible.
+        # - Set to dt on the first update after an ff becomes newly visible (see _update_ff_visibility).
+        # Interprets "time since this visibility episode started".
+        self.ff_t_since_start_seen = np.zeros(
+            self.num_alive_ff, dtype=np.float32)
+
+
+        # ff_t_since_last_seen: per-ff timer that accumulates when the ff is NOT visible.
+        # - Reset to 0 every step for ff that are currently visible.
+        # - Increments by dt otherwise (see _update_ff_visibility).
+        # Interprets "time elapsed since the ff was last visible" (useful for memory eligibility).
         self.ff_t_since_last_seen = np.full(
             self.num_alive_ff, 1e9, dtype=np.float32)
+        
+        
         self.ff_visible = np.zeros(self.num_alive_ff, dtype=np.int32)
         self._init_identity_slots()
         self._slot_valid_mask = np.zeros(self.num_obs_ff, dtype=np.int32)
@@ -762,8 +776,8 @@ class MultiFF(gymnasium.Env):
             t_last01 = (t_last / self.T_max).astype(np.float32)
 
             # Visible and valid flags
-            visible = self.ff_visible[ffids].astype(np.float32)
-            valid = np.ones_like(visible, dtype=np.float32)
+            self.visible = self.ff_visible[ffids].astype(np.float32)
+            valid = np.ones_like(self.visible, dtype=np.float32)
 
             # If using prev obs for invisible pose, overwrite content from previous slots snapshot
             if getattr(self, 'use_prev_obs_for_invisible_pose', False) and (self._prev_slots_SN is not None):
@@ -786,11 +800,11 @@ class MultiFF(gymnasium.Env):
 
             # compute pose_unreliable = 1 - visible
             if getattr(self, 'use_prev_obs_for_invisible_pose', False) or getattr(self, 'use_prev_obs_for_invisible_pose', False):
-                self.pose_unreliable = (visible < 0.5).astype(np.float32)
+                self.pose_unreliable = (self.visible < 0.5).astype(np.float32)
             else:
-                self.pose_unreliable = np.zeros_like(visible, dtype=np.float32)
+                self.pose_unreliable = np.zeros_like(self.visible, dtype=np.float32)
             # assemble selected fields directly into (K,N)
-            full_fields = (valid, d_log01, sin_theta, cos_theta, t_start01, t_last01, visible, self.pose_unreliable)
+            full_fields = (valid, d_log01, sin_theta, cos_theta, t_start01, t_last01, self.visible, self.pose_unreliable)
             if isinstance(out_idx, slice):
                 outK = np.stack(full_fields, axis=1).astype(np.float32)
             else:
@@ -798,7 +812,7 @@ class MultiFF(gymnasium.Env):
                 outK = full_stack[:, out_idx].astype(np.float32)  # (K,N)
             # Optionally zero features for invisible fireflies assigned to slots
             if getattr(self, 'zero_invisible_ff_features', False):
-                invis_rows = visible < 0.5
+                invis_rows = self.visible < 0.5
                 if np.any(invis_rows):
                     # preserve 'valid', 't_start_seen', 't_last_seen'
                     # and optionally pose features ('d_log','sin','cos') if requested

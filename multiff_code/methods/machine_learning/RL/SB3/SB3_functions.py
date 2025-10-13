@@ -231,6 +231,7 @@ class SaveOnBestTrainingRewardAndStopTrainingOnNoTestingRewardImprovement(SaveOn
     """
     This class combines SaveOnBestTrainingRewardCallback and StopTrainingOnNoModelImprovement
 
+    !!!!!!!!!!!!!!!!!!
     In reality, this new class is not useful, because I can just add best_model_save_path to EvalCallback which can also call StopTrainingOnNoModelImprovement. 
 
     Example:
