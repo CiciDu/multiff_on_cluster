@@ -617,8 +617,9 @@ def train_LSTM_agent(env, sac_model,
                         break
 
             eval_rewards.append(avg_reward)
-            plot_eval_rewards(eval_rewards)
-            plot_alpha(list_of_epi_for_alpha, list_of_alpha)
+            print('Evaluation rewards:', eval_rewards)
+            # plot_eval_rewards(eval_rewards)
+            # plot_alpha(list_of_epi_for_alpha, list_of_alpha)
             if len(eval_rewards) > 100:
                 eval_rewards = eval_rewards[-100:]
 

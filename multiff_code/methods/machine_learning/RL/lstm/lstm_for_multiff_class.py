@@ -82,7 +82,7 @@ class LSTMforMultifirefly(rl_for_multiff_class._RLforMultifirefly):
         self.agent_params['replay_buffer'] = self.replay_buffer
         self.sac_model = LSTM_functions.SAC_Trainer(**self.agent_params)
 
-    def make_initial_env_for_curriculum_training(self, initial_dt=0.25, initial_flash_on_interval=3.3, initial_angular_terminal_vel=1):
+    def make_initial_env_for_curriculum_training(self, initial_dt=0.1, initial_flash_on_interval=3, initial_angular_terminal_vel=0.64):
         self.make_env()
         self._make_initial_env_for_curriculum_training(initial_dt=initial_dt,
                                                          initial_angular_terminal_vel=initial_angular_terminal_vel)
@@ -127,7 +127,7 @@ class LSTMforMultifirefly(rl_for_multiff_class._RLforMultifirefly):
             # Note: 0.00222 = 0.0035/(pi/2), same as the monkey's threshold
             num_eval_episodes = 1
             reward_threshold = rl_for_multiff_utils.calculate_reward_threshold_for_curriculum_training(
-                self.env, n_eval_episodes=num_eval_episodes, ff_caught_rate_threshold=1/5)
+                self.env, n_eval_episodes=num_eval_episodes, ff_caught_rate_threshold=0.1)
             print('Current reward_threshold to progress in curriculum training:', reward_threshold)
             # reward_threshold = 1000
             self.regular_training(eval_eps_freq=eval_eps_freq, num_eval_episodes=num_eval_episodes,
@@ -138,7 +138,7 @@ class LSTMforMultifirefly(rl_for_multiff_class._RLforMultifirefly):
 
         # after all condition is met, train the agent once more until it reaches the desired performance
         reward_threshold = rl_for_multiff_utils.calculate_reward_threshold_for_curriculum_training(
-            self.env, n_eval_episodes=num_eval_episodes, ff_caught_rate_threshold=1/5)
+            self.env, n_eval_episodes=num_eval_episodes, ff_caught_rate_threshold=0.1)
         self.regular_training(eval_eps_freq=eval_eps_freq, num_eval_episodes=num_eval_episodes,
                               reward_threshold_to_stop_on=reward_threshold, dir_name=self.best_model_after_curriculum_dir_name,
                               env_params_to_save=self.env_kwargs_for_curriculum_training)

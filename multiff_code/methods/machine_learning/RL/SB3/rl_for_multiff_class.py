@@ -149,7 +149,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                                          video_dir=self.best_model_after_curriculum_dir_name)
         self.agent_id = self.original_agent_id
 
-    def _make_initial_env_for_curriculum_training(self, initial_dt=0.25, initial_angular_terminal_vel=0.32):
+    def _make_initial_env_for_curriculum_training(self, initial_dt=0.1, initial_angular_terminal_vel=0.32):
         self.env_kwargs_for_curriculum_training = copy.deepcopy(
             self.env_kwargs)
         self._make_env_suitable_for_curriculum_training()

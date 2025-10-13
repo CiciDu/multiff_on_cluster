@@ -21,6 +21,6 @@ class EnvForLSTM(base_env.MultiFF):
                          distance2center_cost=distance2center_cost, **kwargs)
 
 
-class CollectInformationLSTM(EnvForLSTM):
+class CollectInformationLSTM(more_envs.BaseCollectInformation):
     def __init__(self, episode_len=16000, **kwargs):
         super().__init__(episode_len=episode_len, **kwargs)

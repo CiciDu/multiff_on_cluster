@@ -67,7 +67,7 @@ class SB3forMultifirefly(rl_for_multiff_class._RLforMultifirefly):
                                  'target_update_interval': kwargs.get('target_update_interval', 50),
                                  'buffer_size': kwargs.get('buffer_size', 1000000),
                                  'learning_starts': kwargs.get('learning_starts', 10000),
-                                 'train_freq': kwargs.get('train_freq', 100),
+                                 'train_freq': kwargs.get('train_freq', 10),
                                  # 'train_freq': kwargs.get('train_freq', 1,),
                                  'gradient_steps': kwargs.get('gradient_steps', 10),
                                  'ent_coef': kwargs.get('ent_coef', 'auto'),
@@ -112,17 +112,17 @@ class SB3forMultifirefly(rl_for_multiff_class._RLforMultifirefly):
                         train_freq=10,
                         gradient_steps=1)
 
-    def make_initial_env_for_curriculum_training(self, initial_dt=0.25, initial_angular_terminal_vel=0.32):
+    def make_initial_env_for_curriculum_training(self, initial_dt=0.1, initial_angular_terminal_vel=0.32):
         self.make_env(monitor_dir=self.best_model_after_curriculum_dir_name)
         self._make_initial_env_for_curriculum_training(initial_dt=initial_dt,
                                                        initial_angular_terminal_vel=initial_angular_terminal_vel)
         self.env.env.angular_terminal_vel = initial_angular_terminal_vel
 
-    def _update_env_dt(self, dt=0.25):
+    def _update_env_dt(self, dt=0.1):
         self.env.env.dt = dt
         self.env_kwargs_for_curriculum_training['dt'] = self.env.env.dt
 
-    def _train_till_reaching_reward_threshold(self, n_eval_episodes=1, ff_caught_rate_threshold=1/5):
+    def _train_till_reaching_reward_threshold(self, n_eval_episodes=1, ff_caught_rate_threshold=0.1):
         reward_threshold = rl_for_multiff_utils.calculate_reward_threshold_for_curriculum_training(
             self.env.env, n_eval_episodes=n_eval_episodes, ff_caught_rate_threshold=ff_caught_rate_threshold)
         print('reward_threshold:', reward_threshold)

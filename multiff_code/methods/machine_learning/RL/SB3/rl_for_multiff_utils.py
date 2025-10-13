@@ -35,12 +35,9 @@ def retrieve_or_make_family_of_agents_log(overall_folder):
 
 
 def calculate_model_gamma(dt):
-    gamma_0 = 0.995
-    dt_0 = 0.25
-
-    n = math.log(dt_0/dt, 2)
-    gamma = 1 - 1/(2**n) + gamma_0/(2**n)
-
+    gamma_0 = 0.998
+    dt_0 = 0.1
+    gamma = gamma_0 ** (dt / dt_0)
     return gamma
 
 

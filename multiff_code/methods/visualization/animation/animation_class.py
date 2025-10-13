@@ -82,8 +82,12 @@ class AnimationClass(further_processing_class.FurtherProcessing):
 
         if save_video:
             self._save_animation(fps, video_dir, file_name)
-            Video(self.video_path_name, embed=True)
-            
+            try:
+                print('Rendering animation ......')
+                Video(self.video_path_name, embed=True)
+            except Exception as e:
+                print('Error rendering animation:', e)
+
 
     def _call_prepare_for_animation_func(self, currentTrial=None, num_trials=None, duration=None, k=1, max_num_frames=None,
                                          max_duration=30, min_duration=1, rotated=True):
