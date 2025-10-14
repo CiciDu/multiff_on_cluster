@@ -549,7 +549,7 @@ class MultiFF(gymnasium.Env):
             total_deviated_distance = np.sum(
                 self.ff_distance_all[self.captured_ff_index])
             catching_ff_reward = catching_ff_reward - \
-                total_deviated_distance * self.distance2center_cost
+                total_deviated_distance * (self.distance2center_cost/self.reward_boundary * 25)
         return catching_ff_reward
 
     def _check_for_captured_ff(self):

@@ -97,23 +97,6 @@ def get_agent_name_from_params(params):
     agent_name = ff_indicator + '_' + memory_indicator + '_' + cost_indicator
     return agent_name
 
-
-def store_params(model_folder_name, params):
-    if model_folder_name is None:
-        raise ValueError('model_folder_name is None')
-
-    params_file = os.path.join(model_folder_name, 'env_params.txt')
-
-    # clear the content of the file if it exists
-    if os.path.exists(params_file):
-        open(params_file, 'w').close()
-
-    with open(params_file, "w") as fp:
-        json.dump(params, fp)  # encode dict into JSON
-        print('Saving env params to', params_file)
-    return
-
-
 def retrieve_params(model_folder_name):
     if model_folder_name is None:
         raise ValueError('model_folder_name is None')
@@ -165,3 +148,21 @@ def add_essential_agent_params_info(df, params, agent_name=None):
     if agent_name is not None:
         df['id'] = agent_name
     return df
+
+def read_checkpoint_manifest(checkpoint_dir):
+    manifest_path = os.path.join(checkpoint_dir, 'checkpoint_manifest.json')
+    try:
+        with open(manifest_path, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def write_checkpoint_manifest(checkpoint_dir, payload):
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    manifest_path = os.path.join(checkpoint_dir, 'checkpoint_manifest.json')
+    try:
+        with open(manifest_path, 'w') as f:
+            json.dump(payload, f, indent=2, default=str)
+    except Exception as e:
+        print(f"Warning: failed to write manifest at {manifest_path}: {e}")
