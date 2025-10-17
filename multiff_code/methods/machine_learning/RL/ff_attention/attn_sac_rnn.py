@@ -32,6 +32,7 @@ import csv
 import math
 from typing import Dict, Any, List, Tuple, Optional
 from contextlib import nullcontext
+import copy
 
 # ===========================
 # Third-party imports
@@ -42,7 +43,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # NOTE: these are project-local imports; expected to be available in your repo
-from machine_learning.RL.ff_attention.env_attn_multiff import (
+from reinforcement_learning.attention.env_attn_multiff import (
     # Gym-like environment wrapper exposing MultiFF observations
     EnvForAttentionSAC,
     # helper to read per-dimension action ranges from the env
@@ -52,7 +53,7 @@ from machine_learning.RL.ff_attention.env_attn_multiff import (
     # torch -> (slot_feats, slot_mask, self_feats)
     seq_obs_to_attn_tensors_torch
 )
-from machine_learning.RL.ff_attention import set_transformers
+from reinforcement_learning.attention import set_transformers
 
 
 # ---------------------------
@@ -276,11 +277,11 @@ class RecurrentAttentionEncoder(nn.Module):
             # batch_first=True: inputs/outputs shaped [B, T, *]
             self.rnn = nn.GRU(input_size=fused_in,
                               hidden_size=d_hidden, batch_first=True)
-        elif self.rnn_type == 'lstm':
+        elif self.rnn_type == 'rnn':
             self.rnn = nn.LSTM(input_size=fused_in,
                                hidden_size=d_hidden, batch_first=True)
         else:
-            raise ValueError("rnn must be 'gru' or 'lstm'")
+            raise ValueError("rnn must be 'gru' or 'rnn'")
 
         self.include_ctx = include_ctx
         self.k = k
@@ -697,7 +698,8 @@ class SequenceReplay:
         if not self.episodes:
             return np.array([], dtype=np.int64)
         counts = np.fromiter(
-            (max(0, ep['obs'].shape[0] - seq_len_total + 1) for ep in self.episodes),
+            (max(0, ep['obs'].shape[0] - seq_len_total + 1)
+             for ep in self.episodes),
             dtype=np.int64,
             count=len(self.episodes),
         )
@@ -790,7 +792,7 @@ class AttnRNNSACforMultifirefly:
             'cuda' if torch.cuda.is_available() else (
                 'mps' if torch.backends.mps.is_available() else 'cpu')
         )
-        self.env_kwargs = env_kwargs.copy()
+        self.input_env_kwargs = env_kwargs.copy()
         self.env = None
 
         # Model handles
@@ -818,14 +820,18 @@ class AttnRNNSACforMultifirefly:
             log_every=1000, eval_every=0, eval_episodes=3, save_every=0
         )
 
-    # ---- Env ----
-    def make_env(self, **kwargs):
-        '''Instantiate the MultiFF env with stored + provided kwargs.'''
-        self.env_kwargs.update(kwargs)
-        self.env = EnvForAttentionSAC(**self.env_kwargs)
-        return self.env
+        self.env_class = EnvForAttentionSAC
+
+    # # ---- Env ----
+    # def make_env(self, **env_kwargs):
+    #     '''Instantiate the MultiFF env with stored + provided kwargs.'''
+    #     self.current_env_kwargs = copy.deepcopy(self.input_env_kwargs)
+    #     self.current_env_kwargs.update(env_kwargs)
+    #     self.env = EnvForAttentionSAC(**self.current_env_kwargs)
+    #     return self.env
 
     # ---- Agent ----
+
     def make_agent(self, **overrides):
         '''
         Build actor/critic networks (+targets) and their optimizers.
@@ -1072,6 +1078,8 @@ class AttnRNNSACforMultifirefly:
         )
         torch.save(payload, os.path.join(path, 'model.pt'))
         print(f'Saved to {path}')
+
+        self.write_checkpoint_manifest(dir_name)
 
     def load_agent(self, dir_name: Optional[str] = None):
         '''Load model + optimizer states from disk.'''
