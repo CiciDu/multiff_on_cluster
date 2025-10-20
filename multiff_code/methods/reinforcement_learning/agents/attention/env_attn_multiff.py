@@ -19,7 +19,7 @@ from typing import List, Tuple, Dict, Optional
 import math
 import numpy as np
 import torch
-from reinforcement_learning.env_related import base_env, more_envs
+from reinforcement_learning.base_classes import base_env, more_envs
 
 try:
     import gymnasium as gym

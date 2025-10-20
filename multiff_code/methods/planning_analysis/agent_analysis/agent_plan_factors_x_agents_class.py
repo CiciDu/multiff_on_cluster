@@ -1,7 +1,7 @@
 from planning_analysis.plan_factors import monkey_plan_factors_x_sess_class
 from planning_analysis.factors_vs_indicators import plot_variations_utils, process_variations_utils
 from planning_analysis.agent_analysis import compare_monkey_and_agent_utils, agent_plan_factors_x_sess_class
-from reinforcement_learning.agents.feedforward import rl_base_utils
+from reinforcement_learning.base_classes import rl_base_utils
 
 import pandas as pd
 import os

@@ -1,5 +1,6 @@
 from planning_analysis.plan_factors import plan_factors_class
-from reinforcement_learning.agents.feedforward import sb3_class, rl_base_class
+from reinforcement_learning.agents.feedforward import sb3_class
+from reinforcement_learning.base_classes import rl_base_class
 
 
 class PlanFactorsOfAgent():

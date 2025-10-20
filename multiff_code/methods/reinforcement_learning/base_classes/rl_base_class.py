@@ -2,11 +2,14 @@ from data_wrangling import general_utils, retrieve_raw_data, process_monkey_info
 from pattern_discovery import organize_patterns_and_features, make_ff_dataframe
 from visualization.matplotlib_tools import additional_plots, plot_statistics
 from visualization.animation import animation_class, animation_utils
-from reinforcement_learning.env_related import env_for_rnn, env_for_sb3, collect_agent_data, process_agent_data
-from reinforcement_learning.agents.feedforward import interpret_neural_network, rl_base_utils, sb3_utils
+from reinforcement_learning.agents.rnn import env_for_rnn
+from reinforcement_learning.agents.feedforward import env_for_sb3
+from reinforcement_learning.collect_data import collect_agent_data, process_agent_data
+from reinforcement_learning.agents.feedforward import interpret_neural_network, sb3_utils
+from reinforcement_learning.base_classes import rl_base_utils
 from decision_making_analysis.compare_GUAT_and_TAFT import find_GUAT_or_TAFT_trials
-from reinforcement_learning.env_related import base_env
-from reinforcement_learning.env_related import env_utils
+from reinforcement_learning.base_classes import base_env
+from reinforcement_learning.base_classes import env_utils
 
 
 import time as time_package
@@ -30,9 +33,9 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                  overall_folder=None,
                  model_folder_name=None,
                  dt=0.1,
-                 dv_cost_factor=10,
-                 dw_cost_factor=10,
-                 w_cost_factor=3,
+                 dv_cost_factor=1,
+                 dw_cost_factor=1,
+                 w_cost_factor=1,
                  flash_on_interval=0.3,
                  max_in_memory_time=3,
                  add_date_to_model_folder_name=False,
@@ -42,6 +45,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                  distance2center_cost=0,
                  stop_vel_cost=50,
                  data_name='data_0',
+                 std_anneal_preserve_fraction=0.25,
                  **additional_env_kwargs):
 
         self.player = "agent"
@@ -51,7 +55,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self.default_env_kwargs = env_utils.get_env_default_kwargs(
             base_env.MultiFF)
         self.additional_env_kwargs = additional_env_kwargs
-        self.default_input_env_kwargs = {'dt': dt,
+        self.class_instance_env_kwargs = {'dt': dt,
                                          'dv_cost_factor': dv_cost_factor,
                                          'dw_cost_factor': dw_cost_factor,
                                          'w_cost_factor': w_cost_factor,
@@ -67,7 +71,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
 
         self.input_env_kwargs = {
             **self.default_env_kwargs,
-            **self.default_input_env_kwargs,
+            **self.class_instance_env_kwargs,
             **self.additional_env_kwargs
         }
 
@@ -84,6 +88,8 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self.model_folder_name = model_folder_name if model_folder_name is not None else os.path.join(
             self.overall_folder, self.agent_id)
         print('model_folder_name:', self.model_folder_name)
+        
+        self.std_anneal_preserve_fraction = std_anneal_preserve_fraction
 
         if add_date_to_model_folder_name:
             self.model_folder_name = self.model_folder_name + "_date" + \
@@ -136,20 +142,34 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         print(f'Made env with the following kwargs: {env_kwargs}')
 
     def curriculum_training(self, best_model_in_curriculum_exists_ok=True, best_model_postcurriculum_exists_ok=True, load_replay_buffer_of_best_model_postcurriculum=True):
-        if not self.loaded_agent_name == 'model':
-            try:
-                if not best_model_postcurriculum_exists_ok:
-                    raise Exception()
-                if self.loaded_agent_name != 'best_model_postcurriculum':
+        if self.loaded_agent_name == 'model':
+            self.regular_training()
+            self.successful_training = True
+            return
+        elif self.loaded_agent_name == 'best_model_in_curriculum':
+            self._progress_in_curriculum(best_model_in_curriculum_exists_ok)
+            self.regular_training()
+            self.successful_training = True
+            return 
+        elif self.loaded_agent_name == 'best_model_postcurriculum':
+            self.regular_training()
+            self.successful_training = True
+            return
+        else:
+            if best_model_postcurriculum_exists_ok:
+                try:
                     self.load_best_model_postcurriculum(
                         load_replay_buffer=load_replay_buffer_of_best_model_postcurriculum)
                     print('Loaded best_model_postcurriculum')
-            except Exception:
-                print('Need to train a new best_model_postcurriculum')
-                self._progress_in_curriculum(
-                    best_model_in_curriculum_exists_ok=best_model_in_curriculum_exists_ok)
-        self.regular_training()
-        self.successful_training = True
+                except Exception:
+                    print('Need to train a new best_model_postcurriculum')
+                    self._progress_in_curriculum(best_model_in_curriculum_exists_ok)
+            else:
+                self._progress_in_curriculum(best_model_in_curriculum_exists_ok)
+            self.regular_training()
+            self.successful_training = True
+            return
+
 
     def _progress_in_curriculum(self, best_model_in_curriculum_exists_ok=True):
         os.makedirs(self.best_model_postcurriculum_dir, exist_ok=True)
@@ -186,11 +206,20 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                                                   initial_angular_terminal_vel=0.64,
                                                   initial_distance2center_cost=2,
                                                   initial_stop_vel_cost=50,
-                                                  initial_reward_boundary=75):
+                                                  initial_reward_boundary=75,
+                                                  initial_dv_cost_factor=0.5,
+                                                  initial_dw_cost_factor=0.5,
+                                                  initial_w_cost_factor=0.5,
+                                                  ):
         self.curriculum_env_kwargs = copy.deepcopy(
             self.input_env_kwargs)
         print('Made initial env for curriculum training')
-        if self.sb3_or_rnn == 'sb3':
+        # Determine wrapped vs direct env from agent_type
+        agent_type = getattr(self, 'agent_type', None)
+        if agent_type is None:
+            # backward: infer from presence of .env on env
+            env = self.env.env if hasattr(self.env, 'env') else self.env
+        elif str(agent_type).lower() in ('sb3', 'ff', 'feedforward'):
             env = self.env.env
         else:
             env = self.env
@@ -200,22 +229,27 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         env.reward_boundary = initial_reward_boundary
         env.distance2center_cost = initial_distance2center_cost
         env.stop_vel_cost = initial_stop_vel_cost
-        env.dv_cost_factor = 0
-        env.dw_cost_factor = 0
-        env.w_cost_factor = 0
+        env.dv_cost_factor = initial_dv_cost_factor
+        env.dw_cost_factor = initial_dw_cost_factor
+        env.w_cost_factor = initial_w_cost_factor
 
         self.curriculum_env_kwargs['flash_on_interval'] = initial_flash_on_interval
         self.curriculum_env_kwargs['angular_terminal_vel'] = initial_angular_terminal_vel
         self.curriculum_env_kwargs['reward_boundary'] = initial_reward_boundary
         self.curriculum_env_kwargs['distance2center_cost'] = initial_distance2center_cost
         self.curriculum_env_kwargs['stop_vel_cost'] = initial_stop_vel_cost
-        self.curriculum_env_kwargs['dv_cost_factor'] = 0
-        self.curriculum_env_kwargs['dw_cost_factor'] = 0
-        self.curriculum_env_kwargs['w_cost_factor'] = 0
+        self.curriculum_env_kwargs['dv_cost_factor'] = initial_dv_cost_factor
+        self.curriculum_env_kwargs['dw_cost_factor'] = initial_dw_cost_factor
+        self.curriculum_env_kwargs['w_cost_factor'] = initial_w_cost_factor
 
         self.current_env_kwargs = self.curriculum_env_kwargs
 
-        if self.sb3_or_rnn == 'sb3':
+        if agent_type is None:
+            if hasattr(self.env, 'env'):
+                self.env.env = env
+            else:
+                self.env = env
+        elif str(agent_type).lower() in ('sb3', 'ff', 'feedforward'):
             self.env.env = env
         else:
             self.env = env
@@ -223,8 +257,10 @@ class _RLforMultifirefly(animation_class.AnimationClass):
     def _change_env_after_meeting_reward_threshold(self):
         
         print('Updating env after meeting reward threshold...')
-
-        if self.sb3_or_rnn == 'sb3':
+        agent_type = getattr(self, 'agent_type', None)
+        if agent_type is None:
+            env = self.env.env if hasattr(self.env, 'env') else self.env
+        elif str(agent_type).lower() in ('sb3', 'ff', 'feedforward'):
             env = self.env.env
         else:
             env = self.env
@@ -240,20 +276,43 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                                 self.input_env_kwargs['stop_vel_cost'])
         env.reward_boundary = max(
             env.reward_boundary - 25, self.input_env_kwargs['reward_boundary'])
+        env.dv_cost_factor = min(env.dv_cost_factor + 0.5, self.input_env_kwargs['dv_cost_factor'])
+        env.dw_cost_factor = min(env.dw_cost_factor + 0.5, self.input_env_kwargs['dw_cost_factor'])
+        env.w_cost_factor = min(env.w_cost_factor + 0.5, self.input_env_kwargs['w_cost_factor'])
 
         self.curriculum_env_kwargs['flash_on_interval'] = env.flash_on_interval
         self.curriculum_env_kwargs['angular_terminal_vel'] = env.angular_terminal_vel
         self.curriculum_env_kwargs['distance2center_cost'] = env.distance2center_cost
         self.curriculum_env_kwargs['stop_vel_cost'] = env.stop_vel_cost
         self.curriculum_env_kwargs['reward_boundary'] = env.reward_boundary
+        self.curriculum_env_kwargs['dv_cost_factor'] = env.dv_cost_factor
+        self.curriculum_env_kwargs['dw_cost_factor'] = env.dw_cost_factor
+        self.curriculum_env_kwargs['w_cost_factor'] = env.w_cost_factor
+        
+        # Reset or partially reset policy std-anneal progress after curriculum env change
+        preserve_fraction = getattr(self, 'std_anneal_preserve_fraction', 0.25)
+        if hasattr(self, 'sac_model') and hasattr(self.sac_model, 'policy_net'):
+            try:
+                current = getattr(self.sac_model.policy_net, 'anneal_step', 0)
+                setattr(self.sac_model.policy_net, 'anneal_step', int(max(0, int(current * preserve_fraction))))
+            except Exception as e:
+                print('Warning: failed to reset std-anneal progress:', e)
 
         print('Current angular_terminal_vel:', env.angular_terminal_vel)
         print('Current flash_on_interval:', env.flash_on_interval)
         print('Current distance2center_cost:', env.distance2center_cost)
         print('Current stop_vel_cost:', env.stop_vel_cost)
         print('Current reward_boundary:', env.reward_boundary)
+        print('Current dv_cost_factor:', env.dv_cost_factor)
+        print('Current dw_cost_factor:', env.dw_cost_factor)
+        print('Current w_cost_factor:', env.w_cost_factor)
 
-        if self.sb3_or_rnn == 'sb3':
+        if agent_type is None:
+            if hasattr(self.env, 'env'):
+                self.env.env = env
+            else:
+                self.env = env
+        elif str(agent_type).lower() in ('sb3', 'ff', 'feedforward'):
             self.env.env = env
         else:
             self.env = env
@@ -290,16 +349,16 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         env_data_collection_kwargs = copy.deepcopy(self.current_env_kwargs)
         env_data_collection_kwargs.update({'episode_len': n_steps+100})
 
-        if self.sb3_or_rnn == 'sb3':
-            self.env_for_data_collection = env_for_sb3.CollectInformation(
-                **env_data_collection_kwargs)
-            LSTM = False
-        elif self.sb3_or_rnn == 'rnn':
+        agent_type = getattr(self, 'agent_type', None)
+        at = str(agent_type).lower() if agent_type is not None else None
+        if at in ('lstm', 'gru', 'rnn'):
             self.env_for_data_collection = env_for_rnn.CollectInformationLSTM(
                 **env_data_collection_kwargs)
             LSTM = True
         else:
-            raise ValueError("sb3_or_rnn should be either 'sb3' or 'rnn'")
+            self.env_for_data_collection = env_for_sb3.CollectInformation(
+                **env_data_collection_kwargs)
+            LSTM = False
 
         self._run_agent_to_collect_data(
             n_steps=n_steps, save_data=save_data, LSTM=LSTM)
@@ -326,7 +385,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self.monkey_information, self.ff_flash_sorted, self.ff_caught_T_sorted, self.ff_believed_position_sorted, \
             self.ff_real_position_sorted, self.ff_life_sorted, self.ff_flash_end_sorted, self.caught_ff_num, self.total_ff_num, \
             self.obs_ff_indices_in_ff_dataframe, self.sorted_indices_all, self.ff_in_obs_df \
-            = collect_agent_data.collect_agent_data_func(self.env_for_data_collection, self.sac_model, n_steps=self.n_steps, LSTM=LSTM)
+            = collect_agent_data.collect_agent_data_func(self.env_for_data_collection, self.sac_model, n_steps=self.n_steps, agent_type=self.agent_type)
         self.ff_index_sorted = np.arange(len(self.ff_life_sorted))
         self.eval_ff_capture_rate = len(
             self.ff_flash_end_sorted)/self.monkey_information['time'].max()
@@ -395,8 +454,8 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                 columns=["Unnamed: 0", "Unnamed: 0.1"], errors='ignore')
         else:
             print('Warnings: currently, only ff in obs at each step are used in ff_dataframe. All ff are labeled \'visible\' regardless of their actual time since last visible.')
-            if self.sb3_or_rnn == 'rnn':
-                print('It is possible that the LSTM agent has the memory of ff in the past, but the code needs to be modified to reflect that. For planning analysis, info of in-memory ff is not needed.')
+            if str(getattr(self, 'agent_type', 'sb3')).lower() in ('lstm', 'gru', 'rnn'):
+                print('It is possible that an RNN agent has memory of past ff; code may need updates to reflect that. For planning analysis, info of in-memory ff is not needed.')
 
             self.make_ff_dataframe_from_ff_in_obs_df()
             # base_processing_class.BaseProcessing.make_or_retrieve_ff_dataframe(self, exists_ok=False, save_into_h5=False)
@@ -490,6 +549,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                               best_model_in_curriculum_exists_ok=True,
                               best_model_postcurriculum_exists_ok=True,
                               to_load_latest_agent=True,
+                              load_replay_buffer=True,
                               to_train_agent=True):
 
         self.family_of_agents_log = rl_base_utils.retrieve_or_make_family_of_agents_log(
@@ -504,7 +564,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
 
         if to_load_latest_agent:
             try:
-                self.load_latest_agent(load_replay_buffer=False)
+                self.load_latest_agent(load_replay_buffer=load_replay_buffer)
             except Exception as e:
                 print(
                     "Failed to load existing agent. Need to train a new agent. Error: ", e)
@@ -746,7 +806,10 @@ class _RLforMultifirefly(animation_class.AnimationClass):
 
         file_name = file_name + '.mp4'
 
-        if self.sb3_or_rnn == 'sb3':
+        agent_type = getattr(self, 'agent_type', None)
+        if agent_type is None:
+            dt = self.env.env.dt if hasattr(self.env, 'env') else self.env.dt
+        elif str(agent_type).lower() in ('sb3', 'ff', 'feedforward'):
             dt = self.env.env.dt
         else:
             dt = self.env.dt
@@ -814,7 +877,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
             for currentTrial in [12, 69, 138, 221, 235]:
                 # more: 259, 263, 265, 299, 393, 496, 523, 556, 601, 666, 698, 760, 805, 808, 930, 946, 955, 1002, 1003
                 info_of_agent, plot_whole_duration, rotation_matrix, num_imitation_steps_monkey, num_imitation_steps_agent = process_agent_data.find_corresponding_info_of_agent(
-                    self.info_of_monkey, currentTrial, num_trials, self.sac_model, self.agent_dt, LSTM=False, env_kwargs=self.current_env_kwargs)
+                    self.info_of_monkey, currentTrial, num_trials, self.sac_model, self.agent_dt, env_kwargs=self.current_env_kwargs, agent_type=getattr(self, 'agent_type', None))
 
                 with general_utils.initiate_plot(20, 20, 400):
                     additional_plots.PlotSidebySide(plot_whole_duration=plot_whole_duration,

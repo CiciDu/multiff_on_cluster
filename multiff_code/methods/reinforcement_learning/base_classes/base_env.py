@@ -3,7 +3,7 @@
 import inspect
 from typing import Optional, Dict
 from dataclasses import dataclass
-from reinforcement_learning.env_related import env_utils
+from reinforcement_learning.base_classes import env_utils
 
 import os
 import numpy as np
@@ -77,9 +77,9 @@ class MultiFF(gymnasium.Env):
                  invisible_distance=500,
                  make_ff_always_flash_on=False,
                  reward_per_ff=100,
-                 dv_cost_factor=10,
-                 dw_cost_factor=10,
-                 w_cost_factor=10,
+                 dv_cost_factor=1,
+                 dw_cost_factor=1,
+                 w_cost_factor=1,
                  distance2center_cost=0,
                  stop_vel_cost=50,
                  reward_boundary=25,
@@ -310,11 +310,10 @@ class MultiFF(gymnasium.Env):
 
         self.dv = (self.prev_v - self.v) / self.dt
         self.dw = (self.prev_w - self.w) / self.dt
-        w = self.action[0]
 
         dv_cost = self.dv**2 * self.dt * self.dv_cost_factor / 160000
-        dw_cost = self.dw**2 * self.dt * self.dw_cost_factor / 630
-        w_cost = w**2 * self.dt * self.w_cost_factor / 2
+        dw_cost = self.dw**2 * self.dt * self.dw_cost_factor / 100
+        w_cost = self.w**2 * self.dt * self.w_cost_factor
         self.cost_breakdown['dv_cost'] += dv_cost
         self.cost_breakdown['dw_cost'] += dw_cost
         self.cost_breakdown['w_cost'] += w_cost

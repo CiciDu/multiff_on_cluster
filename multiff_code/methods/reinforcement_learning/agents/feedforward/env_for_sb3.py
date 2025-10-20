@@ -1,4 +1,4 @@
-from reinforcement_learning.env_related import base_env, more_envs, env_utils
+from reinforcement_learning.base_classes import base_env, more_envs, env_utils
 import gymnasium
 
 import os

@@ -1,7 +1,11 @@
 from data_wrangling import process_monkey_information
 from pattern_discovery import make_ff_dataframe
-from reinforcement_learning.env_related import env_for_rnn, env_for_sb3
-from reinforcement_learning.env_related.process_agent_data import (
+from reinforcement_learning.agents.rnn import env_for_rnn
+from reinforcement_learning.agents.feedforward import env_for_sb3
+from reinforcement_learning.agents.attention.env_attn_multiff import (
+    get_action_limits as attn_get_action_limits,
+)
+from reinforcement_learning.collect_data.process_agent_data import (
     find_flash_time_for_one_ff,
     make_ff_flash_sorted,
     make_env_ff_flash_from_real_data,
@@ -31,31 +35,44 @@ np.set_printoptions(suppress=True)
 pd.set_option('display.float_format', lambda x: '%.5f' % x)
 
 
-device = "cpu"  # Default to CPU since we're removing torch dependencies
+device = "cpu"  # Default to CPU
 
 
 # ---------------------------------------------------------------------
 # Helper 1: Initialization
 # ---------------------------------------------------------------------
-def _initialize_agent_state(env, sac_model, LSTM=False, hidden_dim=128, first_obs=None, seed=42):
-    """Initialize agent state, environment, and hidden state if using LSTM."""
+def _initialize_agent_state(env, sac_model, hidden_dim=128, first_obs=None, seed=42, agent_type=None):
+    """Initialize agent state, environment, and hidden state for different agent types."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
 
-    if LSTM:
+    derived_agent_type = str(agent_type).lower() if agent_type is not None else "sb3"
+
+    if derived_agent_type in ("lstm", "gru"):
         if first_obs is None:
             state, _ = env.reset()
         else:
             state = first_obs
         last_action = env.action_space.sample()
         model_device = next(sac_model.policy_net.parameters()).device
-        hidden_out = (
-            torch.zeros([1, 1, hidden_dim], dtype=torch.float32, device=model_device),
-            torch.zeros([1, 1, hidden_dim], dtype=torch.float32, device=model_device)
-        )
+        # Align hidden size with the model's configured hidden dimension when available
+        model_hidden_dim = getattr(sac_model, 'hidden_dim', hidden_dim)
+        if derived_agent_type == "lstm":
+            hidden_out = (
+                torch.zeros([1, 1, model_hidden_dim], dtype=torch.float32, device=model_device),
+                torch.zeros([1, 1, model_hidden_dim], dtype=torch.float32, device=model_device)
+            )
+        else:  # GRU
+            hidden_out = torch.zeros([1, 1, model_hidden_dim], dtype=torch.float32, device=model_device)
         return state, last_action, hidden_out
-    else:
+    elif derived_agent_type in ("attn", "attention", "attn_ff", "attn_rnn", "attention_ff", "attention_rnn"):
+        if first_obs is None:
+            obs, _ = env.reset()
+        else:
+            obs = first_obs
+        return obs, None, None
+    else:  # SB3 feedforward
         if first_obs is None:
             obs, _ = env.reset()
         else:
@@ -66,19 +83,30 @@ def _initialize_agent_state(env, sac_model, LSTM=False, hidden_dim=128, first_ob
 # ---------------------------------------------------------------------
 # Helper 2: Core data collection loop
 # ---------------------------------------------------------------------
-def _collect_monkey_and_ff_data(env, sac_model, n_steps, LSTM, hidden_dim, deterministic,
-                                state_or_obs, last_action, hidden_out):
-    """Core loop for collecting agent, monkey, and firefly data."""
+def _collect_monkey_and_ff_data(env, sac_model, n_steps, hidden_dim, deterministic,
+                                state_or_obs, last_action, hidden_out, agent_type=None):
+    """Core loop for collecting agent, monkey, and firefly data across agent types."""
     monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, time = ([] for _ in range(6))
     indexes_in_ff_flash, corresponding_time, ff_x_noisy, ff_y_noisy = ([] for _ in range(4))
     pose_unreliable, visible, time_since_last_vis_list, all_steps = ([] for _ in range(4))
     
+    derived_agent_type = str(agent_type).lower() if agent_type is not None else "sb3"
+
+    is_rnn = derived_agent_type in ("lstm", "gru")
+    is_attn_ff = derived_agent_type in ("attn", "attention", "attn_ff", "attention_ff")
+    is_attn_rnn = derived_agent_type in ("attn_rnn", "attention_rnn")
+    attn_limits = None
+    if is_attn_ff or is_attn_rnn:
+        try:
+            attn_limits = attn_get_action_limits(env)
+        except Exception:
+            attn_limits = [(-1.0, 1.0), (-1.0, 1.0)]
 
     for step in range(n_steps):
         if step % 1000 == 0 and step != 0:
             logging.info(f"Step: {step} / {n_steps}")
 
-        if LSTM:
+        if is_rnn:
             hidden_in = hidden_out
             action, hidden_out = sac_model.policy_net.get_action(
                 state_or_obs, last_action, hidden_in, deterministic=deterministic
@@ -86,6 +114,61 @@ def _collect_monkey_and_ff_data(env, sac_model, n_steps, LSTM, hidden_dim, deter
             next_obs, reward, terminated, truncated, _ = env.step(action)
             last_action = action
             state_or_obs = next_obs
+        elif is_attn_ff or is_attn_rnn:
+            if hasattr(env, "obs_to_attn_tensors") and hasattr(sac_model, "actor"):
+                if is_attn_rnn:
+                    sf, sm, ss = env.obs_to_attn_tensors(state_or_obs, device=device)
+                    with torch.no_grad():
+                        mu_seq, std_seq, _, hidden_out = sac_model.actor(
+                            sf.unsqueeze(1), sm.unsqueeze(1), ss.unsqueeze(1), hx=hidden_out
+                        )
+                        mu = mu_seq[:, -1]
+                        std = std_seq[:, -1]
+                        if deterministic:
+                            a = torch.tanh(mu)
+                            scaled = []
+                            for j in range(a.size(-1)):
+                                lo, hi = attn_limits[j]
+                                mid, half = 0.5 * (hi + lo), 0.5 * (hi - lo)
+                                scaled.append(mid + half * a[:, j:j+1])
+                            act_tensor = torch.cat(scaled, dim=-1)
+                        else:
+                            # Reuse sampling util from policy if available, else approximate
+                            z = torch.randn_like(std)
+                            act_tensor = torch.tanh(mu + std * z)
+                            scaled = []
+                            for j in range(act_tensor.size(-1)):
+                                lo, hi = attn_limits[j]
+                                mid, half = 0.5 * (hi + lo), 0.5 * (hi - lo)
+                                scaled.append(mid + half * act_tensor[:, j:j+1])
+                            act_tensor = torch.cat(scaled, dim=-1)
+                    action = act_tensor.squeeze(0).detach().cpu().numpy().astype(np.float32)
+                else:
+                    sf, sm, ss = env.obs_to_attn_tensors(state_or_obs, device=device)
+                    with torch.no_grad():
+                        mu, std, _, _ = sac_model.actor(sf, sm, ss)
+                        if deterministic:
+                            a = torch.tanh(mu)
+                            scaled = []
+                            for j in range(a.size(-1)):
+                                lo, hi = attn_limits[j]
+                                mid, half = 0.5 * (hi + lo), 0.5 * (hi - lo)
+                                scaled.append(mid + half * a[0, j:j+1])
+                            act_tensor = torch.cat(scaled, dim=-1)
+                        else:
+                            z = torch.randn_like(std)
+                            act_tensor = torch.tanh(mu + std * z)
+                            scaled = []
+                            for j in range(act_tensor.size(-1)):
+                                lo, hi = attn_limits[j]
+                                mid, half = 0.5 * (hi + lo), 0.5 * (hi - lo)
+                                scaled.append(mid + half * act_tensor[0, j:j+1])
+                            act_tensor = torch.cat(scaled, dim=-1)
+                    action = act_tensor.squeeze(0).detach().cpu().numpy().astype(np.float32)
+                state_or_obs, reward, terminated, truncated, info = env.step(action)
+            else:
+                action, _ = sac_model.predict(state_or_obs, deterministic=deterministic)
+                state_or_obs, reward, terminated, truncated, info = env.step(action)
         else:
             action, _ = sac_model.predict(state_or_obs, deterministic=deterministic)
             state_or_obs, reward, terminated, truncated, info = env.step(action)
@@ -118,7 +201,7 @@ def _collect_monkey_and_ff_data(env, sac_model, n_steps, LSTM, hidden_dim, deter
             pose_unreliable.extend(env.pose_unreliable.tolist())
             visible.extend(env.visible.tolist())
 
-        if (LSTM and (terminated or truncated)) or (not LSTM and (terminated or truncated)):
+        if terminated or truncated:
             logging.info("Episode ended (terminated or truncated) by environment.")
             break
 
@@ -132,21 +215,21 @@ def _collect_monkey_and_ff_data(env, sac_model, n_steps, LSTM, hidden_dim, deter
 # ---------------------------------------------------------------------
 # Main Function
 # ---------------------------------------------------------------------
-def collect_agent_data_func(env, sac_model, n_steps=15000, LSTM=False,
-                            hidden_dim=128, deterministic=True, first_obs=None, seed=42):
+def collect_agent_data_func(env, sac_model, n_steps=15000,
+                            hidden_dim=128, deterministic=True, first_obs=None, seed=42, agent_type=None):
     """
     Extract data points from monkey's behavior by increasing the interval between the points.
     """
 
     # Initialize
     state_or_obs, last_action, hidden_out = _initialize_agent_state(
-        env, sac_model, LSTM, hidden_dim, first_obs, seed
+        env, sac_model, hidden_dim, first_obs, seed, agent_type
     )
 
     # Collect environment data
     results = _collect_monkey_and_ff_data(
-        env, sac_model, n_steps, LSTM, hidden_dim, deterministic,
-        state_or_obs, last_action, hidden_out
+        env, sac_model, n_steps, hidden_dim, deterministic,
+        state_or_obs, last_action, hidden_out, agent_type
     )
 
     (monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, time,

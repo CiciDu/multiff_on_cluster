@@ -806,6 +806,8 @@ class AttnRNNSACforMultifirefly:
         # Sequence replay buffer
         self.replay_seq = SequenceReplay(
             capacity_episodes=1000, device=self.device)
+        
+        self.agent_type = 'attention'
 
         # Default configuration (override via make_agent(overrides))
         self.cfg = dict(

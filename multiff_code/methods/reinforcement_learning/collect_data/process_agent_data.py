@@ -1,6 +1,11 @@
 from data_wrangling import general_utils
 from pattern_discovery import pattern_by_trials, make_ff_dataframe
-from reinforcement_learning.env_related import env_for_rnn, env_for_sb3
+from reinforcement_learning.agents.rnn import env_for_rnn
+from reinforcement_learning.agents.feedforward import env_for_sb3
+from reinforcement_learning.agents.attention.env_attn_multiff import (
+    EnvForAttentionSAC as EnvForAttention,
+    get_action_limits as attn_get_action_limits,
+)
 
 import os
 import shutil
@@ -133,7 +138,7 @@ def reverse_value_and_position(sorted_indices_all):
     return reversed_sorting
 
 
-def find_corresponding_info_of_agent(info_of_monkey, currentTrial, num_trials, sac_model, agent_dt, LSTM=False, env_kwargs=None):
+def find_corresponding_info_of_agent(info_of_monkey, currentTrial, num_trials, sac_model, agent_dt, env_kwargs=None, agent_type=None):
     """
     Run the agent in a replicated environment around a monkey trial segment, returning agent info used in plots.
     """
@@ -157,15 +162,29 @@ def find_corresponding_info_of_agent(info_of_monkey, currentTrial, num_trials, s
     env_kwargs['dt'] = agent_dt
     env_kwargs['num_alive_ff'] = len(alive_ffs)
 
-    if LSTM:
+    # Normalize agent_type and default to sb3
+    agent_type = str(agent_type).lower() if agent_type is not None else "sb3"
+
+    is_rnn = agent_type in ("lstm", "gru")
+    is_attn_ff = agent_type in ("attn", "attention", "attn_ff", "attention_ff")
+    is_attn_rnn = agent_type in ("attn_rnn", "attention_rnn")
+
+    if is_rnn:
         env = env_for_rnn.CollectInformationLSTM(**env_kwargs)
         model_device = next(sac_model.policy_net.parameters()).device
-        hidden_out = (
-            torch.zeros([1, 1, sac_model.hidden_dim], dtype=torch.float32, device=model_device),
-            torch.zeros([1, 1, sac_model.hidden_dim], dtype=torch.float32, device=model_device)
-        )
+        if agent_type == "lstm":
+            hidden_out = (
+                torch.zeros([1, 1, sac_model.hidden_dim], dtype=torch.float32, device=model_device),
+                torch.zeros([1, 1, sac_model.hidden_dim], dtype=torch.float32, device=model_device)
+            )
+        else:
+            hidden_out = torch.zeros([1, 1, sac_model.hidden_dim], dtype=torch.float32, device=model_device)
+    elif is_attn_ff or is_attn_rnn:
+        env = EnvForAttention(**env_kwargs)
+        hidden_out = None
     else:
         env = env_for_sb3.CollectInformation(**env_kwargs)
+        hidden_out = None
     env.flash_on_interval = 0.3
 
     env.distance2center_cost = 0
@@ -192,13 +211,20 @@ def find_corresponding_info_of_agent(info_of_monkey, currentTrial, num_trials, s
 
     for step in range(1, num_imitation_steps_agent):
         prev_ff_information = env.ff_information.copy()
-        if LSTM:
+        if is_rnn:
             if step > 0:
                 hidden_in = hidden_out
                 action, hidden_out = sac_model.policy_net.get_action(state, last_action, hidden_in, deterministic=True)
             last_action = monkey_actions[step]
             next_state, reward, done, _, _ = env.step(monkey_actions[step])
             state = next_state
+        elif is_attn_ff or is_attn_rnn:
+            # During imitation, still step env with monkey actions; update hidden_out for attention RNN
+            if is_attn_rnn and hasattr(env, 'obs_to_attn_tensors') and hasattr(sac_model, 'actor'):
+                sf, sm, ss = env.obs_to_attn_tensors(obs, device=next(sac_model.actor.parameters()).device)
+                with torch.no_grad():
+                    mu_seq, std_seq, _, hidden_out = sac_model.actor(sf.unsqueeze(1), sm.unsqueeze(1), ss.unsqueeze(1), hx=hidden_out)
+            obs, reward, done, _, info = env.step(monkey_actions[step])
         else:
             obs, reward, done, _, info = env.step(monkey_actions[step])
         env.agentheading = np.array([A_cum_angle[step]])
@@ -222,12 +248,43 @@ def find_corresponding_info_of_agent(info_of_monkey, currentTrial, num_trials, s
     env.w_noise_std = original_w_noise_std
     num_total_steps = int(np.ceil((plot_whole_duration[1] - plot_whole_duration[0]) / agent_dt))
     for step in range(num_imitation_steps_agent, num_total_steps + 10):
-        if LSTM:
+        if is_rnn:
             hidden_in = hidden_out
             action, hidden_out = sac_model.policy_net.get_action(state, last_action, hidden_in, deterministic=True)
             last_action = action
             next_state, reward, done, _, _ = env.step(action)
             state = next_state
+        elif is_attn_ff or is_attn_rnn:
+            attn_limits = attn_get_action_limits(env)
+            if hasattr(env, 'obs_to_attn_tensors') and hasattr(sac_model, 'actor'):
+                if is_attn_rnn:
+                    sf, sm, ss = env.obs_to_attn_tensors(obs, device=next(sac_model.actor.parameters()).device)
+                    with torch.no_grad():
+                        mu_seq, std_seq, _, hidden_out = sac_model.actor(sf.unsqueeze(1), sm.unsqueeze(1), ss.unsqueeze(1), hx=hidden_out)
+                        mu = mu_seq[:, -1]
+                        a = torch.tanh(mu)
+                        scaled = []
+                        for j in range(a.size(-1)):
+                            lo, hi = attn_limits[j]
+                            mid, half = 0.5 * (hi + lo), 0.5 * (hi - lo)
+                            scaled.append(mid + half * a[:, j:j+1])
+                        act_tensor = torch.cat(scaled, dim=-1)
+                    action = act_tensor.squeeze(0).detach().cpu().numpy().astype(np.float32)
+                else:
+                    sf, sm, ss = env.obs_to_attn_tensors(obs, device=next(sac_model.actor.parameters()).device)
+                    with torch.no_grad():
+                        mu, std, _, _ = sac_model.actor(sf, sm, ss)
+                        a = torch.tanh(mu)
+                        scaled = []
+                        for j in range(a.size(-1)):
+                            lo, hi = attn_limits[j]
+                            mid, half = 0.5 * (hi + lo), 0.5 * (hi - lo)
+                            scaled.append(mid + half * a[0, j:j+1])
+                        act_tensor = torch.cat(scaled, dim=-1)
+                    action = act_tensor.squeeze(0).detach().cpu().numpy().astype(np.float32)
+            else:
+                action, _ = sac_model.predict(obs, deterministic=True)
+            obs, reward, done, _, info = env.step(action)
         else:
             action, _ = sac_model.predict(obs, deterministic=True)
             obs, reward, done, _, info = env.step(action)

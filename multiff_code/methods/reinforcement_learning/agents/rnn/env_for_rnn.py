@@ -1,4 +1,5 @@
-from reinforcement_learning.env_related import base_env, more_envs
+from reinforcement_learning.base_classes import base_env
+from reinforcement_learning.base_classes import more_envs
 
 import os
 import numpy as np

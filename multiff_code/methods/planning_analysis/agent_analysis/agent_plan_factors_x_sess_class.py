@@ -4,7 +4,7 @@ from planning_analysis.show_planning import show_planning_class
 from planning_analysis.plan_factors import monkey_plan_factors_x_sess_class
 from planning_analysis.agent_analysis import agent_plan_factors_class
 from planning_analysis.factors_vs_indicators import variations_base_class
-from reinforcement_learning.agents.feedforward import rl_base_class
+from reinforcement_learning.base_classes import rl_base_class
 
 import pandas as pd
 import os

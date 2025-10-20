@@ -1,7 +1,8 @@
 
-from reinforcement_learning.env_related import env_for_sb3
-from reinforcement_learning.agents.feedforward import rl_base_class, rl_base_utils, sb3_utils
-from reinforcement_learning.env_related import env_utils
+from reinforcement_learning.agents.feedforward import env_for_sb3
+from reinforcement_learning.base_classes import rl_base_class, rl_base_utils
+from reinforcement_learning.agents.feedforward import sb3_utils
+from reinforcement_learning.base_classes import env_utils
 
 import os
 import matplotlib.pyplot as plt
@@ -30,7 +31,7 @@ class SB3forMultifirefly(rl_base_class._RLforMultifirefly):
                          add_date_to_model_folder_name=add_date_to_model_folder_name,
                          **kwargs)
 
-        self.sb3_or_rnn = 'sb3'
+        self.agent_type = 'sb3'
         self.monkey_name = None
 
         self.env_class = env_for_sb3.EnvForSB3
@@ -38,7 +39,7 @@ class SB3forMultifirefly(rl_base_class._RLforMultifirefly):
         self.default_env_kwargs = env_utils.get_env_default_kwargs(self.env_class)
         self.input_env_kwargs = {
             **self.default_env_kwargs,
-            **self.default_input_env_kwargs,
+            **self.class_instance_env_kwargs,
             **self.additional_env_kwargs
         }
         
@@ -74,7 +75,7 @@ class SB3forMultifirefly(rl_base_class._RLforMultifirefly):
                                  'gradient_steps': kwargs.get('gradient_steps', 10),
                                  'ent_coef': kwargs.get('ent_coef', 'auto'),
                                  'policy_kwargs': kwargs.get('policy_kwargs', dict(activation_fn=nn.ReLU, net_arch=[256, 128])),
-                                 'gamma': rl_base_utils.calculate_model_gamma(self.env.env.dt),
+                                 'gamma': 0.99,
                                  }
         else:
             self.agent_params.update(kwargs)

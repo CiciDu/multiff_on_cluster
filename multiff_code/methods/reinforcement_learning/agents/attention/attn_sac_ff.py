@@ -383,6 +383,8 @@ class AttnSACforMultifirefly:
             torch.tensor(0.0, device=self.device))
         self.alpha_opt = None
 
+        self.agent_type = 'attention'
+
         # replay
         self.replay = None
 

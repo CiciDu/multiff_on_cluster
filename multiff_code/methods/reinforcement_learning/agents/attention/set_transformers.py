@@ -4,7 +4,7 @@ import math
 import torch
 import torch.nn as nn
 
-from reinforcement_learning.attention import attn_sac_ff, attn_sac_rnn, env_attn_multiff
+from reinforcement_learning.agents.attention import attn_sac_ff, attn_sac_rnn, env_attn_multiff
 
 # ================================================================
 # Core Attention Blocks (MAB / SAB / ISAB / PMA)

@@ -83,8 +83,8 @@ def get_agent_name_from_params(params):
 
     memory_indicator = 'mem' + str(params['max_in_memory_time'])
 
-    if ((params['dv_cost_factor']) == 10) & \
-            ((params['dw_cost_factor']) == 10) & ((params['w_cost_factor']) == 10):
+    if ((params['dv_cost_factor']) == 1) & \
+            ((params['dw_cost_factor']) == 1) & ((params['w_cost_factor']) == 1):
         cost_indicator = 'costT'
     elif ((params['dv_cost_factor']) == 0) & \
             ((params['dw_cost_factor']) == 0) & ((params['w_cost_factor']) == 0):
@@ -150,12 +150,18 @@ def add_essential_agent_params_info(df, params, agent_name=None):
     return df
 
 def read_checkpoint_manifest(checkpoint_dir):
+    if not isinstance(checkpoint_dir, str) or len(checkpoint_dir) == 0:
+        raise ValueError(f"Warning: checkpoint_dir is not a string or is empty: {checkpoint_dir}")
     manifest_path = os.path.join(checkpoint_dir, 'checkpoint_manifest.json')
     try:
         with open(manifest_path, 'r') as f:
-            return json.load(f)
-    except Exception:
-        return None
+            data = json.load(f)
+            # tolerate both dict payloads and legacy raw env_kwargs
+            if isinstance(data, dict):
+                return data
+            return {'env_params': data}
+    except Exception as e:
+        raise ValueError(f"Failed to read manifest at {manifest_path}: {e}")
 
 
 def write_checkpoint(checkpoint_dir, current_env_kwargs):
@@ -163,6 +169,10 @@ def write_checkpoint(checkpoint_dir, current_env_kwargs):
     manifest_path = os.path.join(checkpoint_dir, 'checkpoint_manifest.json')
     try:
         with open(manifest_path, 'w') as f:
-            json.dump(current_env_kwargs, f, indent=2, default=str)
+            # If a full manifest dict is provided, write it; else wrap as env_params
+            payload = current_env_kwargs if isinstance(current_env_kwargs, dict) and (
+                'env_params' in current_env_kwargs or 'algorithm' in current_env_kwargs or 'model_files' in current_env_kwargs
+            ) else {'env_params': current_env_kwargs}
+            json.dump(payload, f, indent=2, default=str)
     except Exception as e:
         print(f"Warning: failed to write manifest at {manifest_path}: {e}")
