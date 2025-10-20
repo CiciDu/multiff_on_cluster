@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 from os.path import exists
 import time as time_package
 import copy
+import torch
 plt.rcParams["animation.html"] = "html5"
 retrieve_buffer = False
 n_steps = 1000
@@ -45,7 +46,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                  distance2center_cost=0,
                  stop_vel_cost=50,
                  data_name='data_0',
-                 std_anneal_preserve_fraction=0.25,
+                 std_anneal_preserve_fraction=0.05,
                  **additional_env_kwargs):
 
         self.player = "agent"
@@ -290,13 +291,27 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self.curriculum_env_kwargs['w_cost_factor'] = env.w_cost_factor
         
         # Reset or partially reset policy std-anneal progress after curriculum env change
-        preserve_fraction = getattr(self, 'std_anneal_preserve_fraction', 0.25)
         if hasattr(self, 'sac_model') and hasattr(self.sac_model, 'policy_net'):
             try:
                 current = getattr(self.sac_model.policy_net, 'anneal_step', 0)
-                setattr(self.sac_model.policy_net, 'anneal_step', int(max(0, int(current * preserve_fraction))))
+                setattr(self.sac_model.policy_net, 'anneal_step', int(max(0, int(current * self.std_anneal_preserve_fraction))))
             except Exception as e:
                 print('Warning: failed to reset std-anneal progress:', e)
+
+        # Reset or partially reset SAC temperature (alpha) for auto-entropy after curriculum env change
+        if hasattr(self, 'sac_model') and hasattr(self.sac_model, 'log_alpha'):
+            try:
+                preserve = float(getattr(self, 'std_anneal_preserve_fraction', 0.05))
+                with torch.no_grad():
+                    # Move log_alpha toward its initialization (0.0 -> alpha=1.0)
+                    self.sac_model.log_alpha.mul_(preserve)
+                    # Keep within the same safety bounds used during updates
+                    self.sac_model.log_alpha.clamp_(min=-10.0, max=10.0)
+                    # Optionally reflect the change on a cached alpha if present
+                    if hasattr(self.sac_model, 'alpha'):
+                        self.sac_model.alpha = self.sac_model.log_alpha.exp()
+            except Exception as e:
+                print('Warning: failed to reset entropy temperature (alpha):', e)
 
         print('Current angular_terminal_vel:', env.angular_terminal_vel)
         print('Current flash_on_interval:', env.flash_on_interval)

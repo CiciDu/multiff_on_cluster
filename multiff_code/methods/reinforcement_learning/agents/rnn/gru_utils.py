@@ -99,8 +99,7 @@ class SAC_PolicyNetworkGRU(lstm_utils.PolicyNetworkBase):
         # the Normal.log_prob outputs the same dim of input features instead of 1 dim probability,
         # needs sum up across the features dim to get 1 dim prob; or else use Multivariate Normal.
         log_prob = log_prob.sum(dim=-1, keepdim=True)
-        
-        print('Action in evaluation function: mean: ', mean, 'std: ', std, 'action: ', action)
+
         return action, log_prob, z, mean, log_std, hidden_out
 
     def get_action(self, state, last_action, hidden_in, deterministic=True):
@@ -508,7 +507,7 @@ def evaluate_gru_agent(env, sac_model, max_steps_per_eps, num_eval_episodes, det
             epi_ctx = {}
             numerics_cfg = lstm_utils.NumericsConfig(
                 mode='warn', max_warns_per_episode=1, escalate_after=10)
-            for _ in range(max_steps_per_eps):
+            for step in range(max_steps_per_eps):
                 hidden_in = hidden_out
                 if not np.isfinite(state).all():
                     lstm_utils._maybe_warn_nans(True, 'eval.state', epi_ctx, numerics_cfg)
@@ -520,6 +519,8 @@ def evaluate_gru_agent(env, sac_model, max_steps_per_eps, num_eval_episodes, det
 
                 action, hidden_out = sac_model.policy_net.get_action(
                     state, last_action, hidden_in, deterministic=deterministic)
+                if step < 50:
+                    print('Action in evaluation: ', action)
                 if isinstance(hidden_out, tuple):
                     hidden_out = tuple(h.detach() for h in hidden_out)
                 else:

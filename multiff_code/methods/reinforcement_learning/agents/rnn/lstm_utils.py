@@ -442,8 +442,7 @@ class SAC_PolicyNetworkLSTM(PolicyNetworkBase):
         # the Normal.log_prob outputs the same dim of input features instead of 1 dim probability,
         # needs sum up across the features dim to get 1 dim prob; or else use Multivariate Normal.
         log_prob = log_prob.sum(dim=-1, keepdim=True)
-        
-        print('Action in evaluation function: mean: ', mean, 'std: ', std, 'action: ', action)
+
         return action, log_prob, z, mean, log_std, hidden_out
 
     def get_action(self, state, last_action, hidden_in, deterministic=True, device=device):
@@ -848,6 +847,8 @@ def evaluate_lstm_agent(env, sac_model, max_steps_per_eps, num_eval_episodes, de
                 # Select action without grads during evaluation and detach hidden state
                 action, hidden_out = sac_model.policy_net.get_action(
                     state, last_action, hidden_in, deterministic=deterministic)
+                if step < 50:
+                    print('Action in evaluation: ', action)
                 if isinstance(hidden_out, tuple):
                     h, c = hidden_out
                     hidden_out = (h.detach(), c.detach())

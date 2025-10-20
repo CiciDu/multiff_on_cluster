@@ -5,7 +5,7 @@
 #SBATCH -c 8
 #SBATCH --mem=32G
 #SBATCH -t 24:00:00
-#SBATCH --array=1-10%3     # 10 combinations, run 3 at a time
+#SBATCH --array=1-12     # 10 combinations, run 3 at a time
 #SBATCH -o /user_data/cicid/Multifirefly-Project/multiff_analysis/logs/lstm_sweep-%A_%a.out
 #SBATCH -e /user_data/cicid/Multifirefly-Project/multiff_analysis/logs/lstm_sweep-%A_%a.err
 
@@ -20,8 +20,8 @@ conda activate multiff_clean
 # Define hyperparameter lists
 # ---------------------
 declare -a LRS=(1e-3 3e-4)
-declare -a NUM_OBS_FF_LIST=(6 7 8 9 10)
-declare -a MAX_IN_MEMORY_TIME_LIST=(1 2 3)
+declare -a NUM_OBS_FF_LIST=(6 7 8)
+declare -a MAX_IN_MEMORY_TIME_LIST=(2 1)
 
 # total combinations = len(LRS) * len(NUM_OBS_FF_LIST) = 2 * 5 = 10
 IDX=$((SLURM_ARRAY_TASK_ID - 1))
@@ -45,7 +45,7 @@ mkdir -p "$OVERALL_FOLDER"
 # ---------------------
 # Run training
 # ---------------------
-echo "[jobinfo] Starting LSTM training for LR=${LR}, NUM_OBS_FF=${NUM_OBS_FF}"
+echo "[jobinfo] Starting LSTM training for LR=${LR}, NUM_OBS_FF=${NUM_OBS_FF}, MAX_IN_MEMORY_TIME=${MAX_IN_MEMORY_TIME}"
 srun python -u multiff_analysis/multiff_code/notebooks/reinforcement_learning/LSTM_training.py \
   --overall-folder "$OVERALL_FOLDER" \
   --dt 0.1 \

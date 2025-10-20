@@ -5,7 +5,7 @@
 #SBATCH -c 8
 #SBATCH --mem=32G
 #SBATCH -t 24:00:00
-#SBATCH --array=1-12%3     # 12 combinations (2×3×2), run 3 at a time
+#SBATCH --array=1-12     # 12 combinations (2×3×2), run 3 at a time
 #SBATCH -o /user_data/cicid/Multifirefly-Project/multiff_analysis/logs/gru_sweep-%A_%a.out
 #SBATCH -e /user_data/cicid/Multifirefly-Project/multiff_analysis/logs/gru_sweep-%A_%a.err
 
