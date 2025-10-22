@@ -81,7 +81,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             "burn_in": kwargs.get('burn_in', 32),
             "batch_size": kwargs.get('batch_size', 8),
             "update_itr": kwargs.get('update_itr', 1),
-            "reward_scale": kwargs.get('reward_scale', 0.5),  # used 10 before
+            "reward_scale": kwargs.get('reward_scale', 0.5), 
             "target_entropy": kwargs.get('target_entropy', - self.env.action_space.shape[0]),
             "soft_tau": kwargs.get('soft_tau', 0.015),
             "train_freq": kwargs.get('train_freq', 10),
@@ -105,7 +105,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
         self.agent_params['replay_buffer'] = self.replay_buffer
         self.sac_model = self.trainer_class(**self.agent_params)
 
-    def make_initial_env_for_curriculum_training(self, initial_flash_on_interval=3, initial_angular_terminal_vel=0.64, initial_reward_boundary=75):
+    def make_initial_env_for_curriculum_training(self, initial_flash_on_interval=3, initial_angular_terminal_vel=0.32, initial_reward_boundary=75):
         self.make_env(**self.input_env_kwargs)
         self._make_initial_env_for_curriculum_training(initial_angular_terminal_vel=initial_angular_terminal_vel,
                                                        initial_flash_on_interval=initial_flash_on_interval,
@@ -115,8 +115,16 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
         self.make_agent()
 
     def _use_while_loop_for_curriculum_training(self, eval_eps_freq=20, num_eval_episodes=2):
-        while (self.env.flash_on_interval > self.input_env_kwargs['flash_on_interval']) or (self.env.angular_terminal_vel > 0.01) or \
-              ('reward_boundary' in self.curriculum_env_kwargs and self.env.reward_boundary > self.input_env_kwargs['reward_boundary']):
+        while (
+              (self.env.flash_on_interval > self.input_env_kwargs['flash_on_interval']) or
+              (self.env.angular_terminal_vel > self.input_env_kwargs['angular_terminal_vel']) or
+              (self.env.reward_boundary > self.input_env_kwargs['reward_boundary']) or
+              (self.env.distance2center_cost > self.input_env_kwargs['distance2center_cost']) or
+              (self.env.stop_vel_cost > self.input_env_kwargs['stop_vel_cost']) or
+              (self.env.dv_cost_factor < self.input_env_kwargs['dv_cost_factor']) or
+              (self.env.dw_cost_factor < self.input_env_kwargs['dw_cost_factor']) or
+              (self.env.w_cost_factor < self.input_env_kwargs['w_cost_factor'])
+        ):
 
             gc.collect()
             reward_threshold = rl_base_utils.calculate_reward_threshold_for_curriculum_training(
@@ -130,7 +138,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             if self.best_avg_reward < reward_threshold:
                 raise ValueError(f'Best average reward {self.best_avg_reward} is less than reward threshold {reward_threshold}. Can\'t progress in curriculum training.')
             print(f'Best average reward: {self.best_avg_reward}, with reward threshold: {reward_threshold}. Moving on to the next stage of curriculum training.')
-            self._change_env_after_meeting_reward_threshold()
+            self._update_env_after_meeting_reward_threshold()
 
         # after all condition is met, train the agent once more until it reaches the desired performance
         os.makedirs(self.best_model_postcurriculum_dir, exist_ok=True)
@@ -283,7 +291,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                     lstm_utils.print_last_n_alphas(self.list_of_alpha, n=100)
                 avg_reward = eval_agent_fn(
                     env, self.sac_model, max_steps_per_eps, num_eval_episodes, deterministic=True)
-                print(f"Best average evaluation reward: {self.best_avg_reward}, Current average evaluation reward: {avg_reward}")
+                print(f"Current average evaluation reward: {avg_reward}")
+                print(f"Best average evaluation reward: {self.best_avg_reward}")
 
                 self.eval_rewards.append(avg_reward)
                 print('Last 10 evaluation rewards:', self.eval_rewards[-10:])
@@ -296,8 +305,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                         if save_fn is not None:
                             save_fn(self.sac_model, dir_name)
                         self.write_checkpoint_manifest(dir_name)
-                        print(f"Best model saved to {dir_name}")
-                    print(f"Best average reward = {self.best_avg_reward}")
+                        print(f"New best model saved to {dir_name}")
+                    print(f"New best average reward: {self.best_avg_reward}")
 
                     if reward_threshold_to_stop_on is not None and \
                             self.best_avg_reward >= reward_threshold_to_stop_on:

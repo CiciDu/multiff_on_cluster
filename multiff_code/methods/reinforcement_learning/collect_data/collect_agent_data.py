@@ -86,7 +86,7 @@ def _initialize_agent_state(env, sac_model, hidden_dim=128, first_obs=None, seed
 def _collect_monkey_and_ff_data(env, sac_model, n_steps, hidden_dim, deterministic,
                                 state_or_obs, last_action, hidden_out, agent_type=None):
     """Core loop for collecting agent, monkey, and firefly data across agent types."""
-    monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, time = ([] for _ in range(6))
+    monkey_x, monkey_y, speed, ang_speed, monkey_angle, is_stop, time = ([] for _ in range(7))
     indexes_in_ff_flash, corresponding_time, ff_x_noisy, ff_y_noisy = ([] for _ in range(4))
     pose_unreliable, visible, time_since_last_vis_list, all_steps = ([] for _ in range(4))
     
@@ -176,9 +176,10 @@ def _collect_monkey_and_ff_data(env, sac_model, n_steps, hidden_dim, determinist
         # Collect monkey data
         monkey_x.append(env.agentx[0])
         monkey_y.append(env.agenty[0])
-        monkey_speed.append(float(env.v))
-        monkey_dw.append(float(env.w))
-        monkey_angles.append(env.agentheading[0])
+        speed.append(float(env.v))
+        ang_speed.append(float(env.w))
+        monkey_angle.append(env.agentheading[0])
+        is_stop.append(env.is_stop)
         time.append(env.time)
 
         # Copy (not mutate) firefly indices
@@ -206,7 +207,7 @@ def _collect_monkey_and_ff_data(env, sac_model, n_steps, hidden_dim, determinist
             break
 
     return (
-        monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, time,
+        monkey_x, monkey_y, speed, ang_speed, monkey_angle, is_stop, time,
         indexes_in_ff_flash, corresponding_time, ff_x_noisy, ff_y_noisy,
         pose_unreliable, visible, time_since_last_vis_list, all_steps
     )
@@ -232,7 +233,7 @@ def collect_agent_data_func(env, sac_model, n_steps=15000,
         state_or_obs, last_action, hidden_out, agent_type
     )
 
-    (monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, time,
+    (monkey_x, monkey_y, speed, ang_speed, monkey_angle, is_stop, time,
      indexes_in_ff_flash, corresponding_time, ff_x_noisy, ff_y_noisy,
      pose_unreliable, visible, time_since_last_vis_list, all_steps) = results
 
@@ -268,7 +269,7 @@ def collect_agent_data_func(env, sac_model, n_steps=15000,
 
     # Collect all monkey data
     monkey_information = pack_monkey_information(
-        time, monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, env.dt
+        time, monkey_x, monkey_y, speed, ang_speed, is_stop,monkey_angle, env.dt
     )
     monkey_information['point_index'] = range(len(monkey_information))
     monkey_information['monkey_speeddummy'] = (
@@ -338,7 +339,8 @@ def find_decimals(x):
         return int(abs(math.log10(abs(x))))
 
 
-def pack_monkey_information(time, monkey_x, monkey_y, monkey_speed, monkey_dw, monkey_angles, dt):
+def pack_monkey_information(time, monkey_x, monkey_y, speed, ang_speed, is_stop, monkey_angle, dt,
+                           ):
     """
     Organize the information of the monkey/agent into a dictionary
 
@@ -351,9 +353,9 @@ def pack_monkey_information(time, monkey_x, monkey_y, monkey_speed, monkey_dw, m
         containing a series of x-positions of the monkey/agent
     monkey_y: list
         containing a series of y-positions of the monkey/agent  
-    monkey_speed: list
+    speed: list
         containing a series of linear speeds of the monkey/agent  
-    monkey_angles: list    
+    monkey_angle: list    
         containing a series of angles of the monkey/agent  
     dt: num
         the time interval
@@ -367,24 +369,20 @@ def pack_monkey_information(time, monkey_x, monkey_y, monkey_speed, monkey_dw, m
     time = np.array(time)
     monkey_x = np.array(monkey_x)
     monkey_y = np.array(monkey_y)
-    monkey_speed = np.array(monkey_speed)
-    monkey_dw = np.array(monkey_dw)
-    monkey_angles = np.array(monkey_angles)
-    monkey_angles = np.remainder(monkey_angles, 2*pi)
+    speed = np.array(speed)
+    ang_speed = np.array(ang_speed)
+    monkey_angle = np.array(monkey_angle)
+    monkey_angle = np.remainder(monkey_angle, 2*pi)
 
     monkey_information = {
         'time': time,
         'monkey_x': monkey_x,
         'monkey_y': monkey_y,
-        'speed': monkey_speed,
-        'ang_speed': monkey_dw,
-        'monkey_angle': monkey_angles,
+        'speed': speed,
+        'ang_speed': ang_speed,
+        'monkey_speeddummy': 1 - is_stop,
+        'monkey_angle': monkey_angle,
     }
-
-    # determine whether the speed of the monkey is above a threshold at each time point
-    monkey_speeddummy = ((monkey_speed > 200 * 0.01 * dt) |
-                         (monkey_dw > pi/2 * 0.01 * dt)).astype(int)
-    monkey_information['monkey_speeddummy'] = monkey_speeddummy
 
     delta_x = np.diff(monkey_information['monkey_x'])
     delta_y = np.diff(monkey_information['monkey_y'])

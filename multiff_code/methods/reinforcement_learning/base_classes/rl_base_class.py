@@ -42,7 +42,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                  add_date_to_model_folder_name=False,
                  reward_per_ff=100,
                  reward_boundary=25,
-                 angular_terminal_vel=0.01,
+                 angular_terminal_vel=0.05,
                  distance2center_cost=0,
                  stop_vel_cost=50,
                  data_name='data_0',
@@ -204,7 +204,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
 
     def _make_initial_env_for_curriculum_training(self,
                                                   initial_flash_on_interval=3,
-                                                  initial_angular_terminal_vel=0.64,
+                                                  initial_angular_terminal_vel=0.32,
                                                   initial_distance2center_cost=2,
                                                   initial_stop_vel_cost=50,
                                                   initial_reward_boundary=75,
@@ -255,7 +255,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         else:
             self.env = env
 
-    def _change_env_after_meeting_reward_threshold(self):
+    def _update_env_after_meeting_reward_threshold(self):
         
         print('Updating env after meeting reward threshold...')
         agent_type = getattr(self, 'agent_type', None)
@@ -265,31 +265,76 @@ class _RLforMultifirefly(animation_class.AnimationClass):
             env = self.env.env
         else:
             env = self.env
-
-        flash_on_interval = max(
-            env.flash_on_interval - 0.3, self.input_env_kwargs['flash_on_interval'])
-        env.flash_on_interval = flash_on_interval
-        env.angular_terminal_vel = max(
-            env.angular_terminal_vel/2,  self.input_env_kwargs['angular_terminal_vel'])
-        env.distance2center_cost = max(
-            env.distance2center_cost - 0.5,  self.input_env_kwargs['distance2center_cost'])
-        env.stop_vel_cost = max(env.stop_vel_cost - 50,
-                                self.input_env_kwargs['stop_vel_cost'])
-        env.reward_boundary = max(
-            env.reward_boundary - 25, self.input_env_kwargs['reward_boundary'])
-        env.dv_cost_factor = min(env.dv_cost_factor + 0.5, self.input_env_kwargs['dv_cost_factor'])
-        env.dw_cost_factor = min(env.dw_cost_factor + 0.5, self.input_env_kwargs['dw_cost_factor'])
-        env.w_cost_factor = min(env.w_cost_factor + 0.5, self.input_env_kwargs['w_cost_factor'])
-
-        self.curriculum_env_kwargs['flash_on_interval'] = env.flash_on_interval
-        self.curriculum_env_kwargs['angular_terminal_vel'] = env.angular_terminal_vel
-        self.curriculum_env_kwargs['distance2center_cost'] = env.distance2center_cost
-        self.curriculum_env_kwargs['stop_vel_cost'] = env.stop_vel_cost
-        self.curriculum_env_kwargs['reward_boundary'] = env.reward_boundary
-        self.curriculum_env_kwargs['dv_cost_factor'] = env.dv_cost_factor
-        self.curriculum_env_kwargs['dw_cost_factor'] = env.dw_cost_factor
-        self.curriculum_env_kwargs['w_cost_factor'] = env.w_cost_factor
         
+        # Snapshot values before update and targets
+        before = {
+            'flash_on_interval': env.flash_on_interval,
+            'angular_terminal_vel': env.angular_terminal_vel,
+            'distance2center_cost': env.distance2center_cost,
+            'stop_vel_cost': env.stop_vel_cost,
+            'reward_boundary': env.reward_boundary,
+            'dv_cost_factor': env.dv_cost_factor,
+            'dw_cost_factor': env.dw_cost_factor,
+            'w_cost_factor': env.w_cost_factor,
+        }
+        targets = {
+            'flash_on_interval': self.input_env_kwargs['flash_on_interval'],
+            'angular_terminal_vel': self.input_env_kwargs['angular_terminal_vel'],
+            'distance2center_cost': self.input_env_kwargs['distance2center_cost'],
+            'stop_vel_cost': self.input_env_kwargs['stop_vel_cost'],
+            'reward_boundary': self.input_env_kwargs['reward_boundary'],
+            'dv_cost_factor': self.input_env_kwargs['dv_cost_factor'],
+            'dw_cost_factor': self.input_env_kwargs['dw_cost_factor'],
+            'w_cost_factor': self.input_env_kwargs['w_cost_factor'],
+        }
+
+        if env.reward_boundary > self.input_env_kwargs['reward_boundary']:
+            env.reward_boundary = max(
+                env.reward_boundary - 10, self.input_env_kwargs['reward_boundary'])
+            self.curriculum_env_kwargs['reward_boundary'] = env.reward_boundary
+            print('Updated reward_boundary to:', env.reward_boundary)
+        elif env.distance2center_cost > self.input_env_kwargs['distance2center_cost']:
+            env.distance2center_cost = max(
+                env.distance2center_cost - 0.5, self.input_env_kwargs['distance2center_cost'])
+            self.curriculum_env_kwargs['distance2center_cost'] = env.distance2center_cost
+            print('Updated distance2center_cost to:', env.distance2center_cost)
+        elif env.angular_terminal_vel > self.input_env_kwargs['angular_terminal_vel']:
+            env.angular_terminal_vel = max(env.angular_terminal_vel/2, self.input_env_kwargs['angular_terminal_vel'])
+            self.curriculum_env_kwargs['angular_terminal_vel'] = env.angular_terminal_vel
+            print('Updated angular_terminal_vel to:', env.angular_terminal_vel)
+        elif env.flash_on_interval > self.input_env_kwargs['flash_on_interval']:
+            env.flash_on_interval = max(env.flash_on_interval - 0.3, self.input_env_kwargs['flash_on_interval'])
+            self.curriculum_env_kwargs['flash_on_interval'] = env.flash_on_interval
+            print('Updated flash_on_interval to:', env.flash_on_interval)
+        elif env.stop_vel_cost > self.input_env_kwargs['stop_vel_cost']:
+            env.stop_vel_cost = max(env.stop_vel_cost - 50,
+                                    self.input_env_kwargs['stop_vel_cost'])
+            self.curriculum_env_kwargs['stop_vel_cost'] = env.stop_vel_cost
+            print('Updated stop_vel_cost to:', env.stop_vel_cost)
+        elif env.dv_cost_factor < self.input_env_kwargs['dv_cost_factor']:
+            env.dv_cost_factor = min(env.dv_cost_factor + 0.5, self.input_env_kwargs['dv_cost_factor'])
+            self.curriculum_env_kwargs['dv_cost_factor'] = env.dv_cost_factor
+            print('Updated dv_cost_factor to:', env.dv_cost_factor)
+        elif env.dw_cost_factor < self.input_env_kwargs['dw_cost_factor']:
+            env.dw_cost_factor = min(env.dw_cost_factor + 0.5, self.input_env_kwargs['dw_cost_factor'])
+            self.curriculum_env_kwargs['dw_cost_factor'] = env.dw_cost_factor
+            print('Updated dw_cost_factor to:', env.dw_cost_factor)
+        elif env.w_cost_factor < self.input_env_kwargs['w_cost_factor']:
+            env.w_cost_factor = min(env.w_cost_factor + 0.5, self.input_env_kwargs['w_cost_factor'])
+            self.curriculum_env_kwargs['w_cost_factor'] = env.w_cost_factor
+        
+        # Snapshot after update
+        after = {
+            'flash_on_interval': env.flash_on_interval,
+            'angular_terminal_vel': env.angular_terminal_vel,
+            'distance2center_cost': env.distance2center_cost,
+            'stop_vel_cost': env.stop_vel_cost,
+            'reward_boundary': env.reward_boundary,
+            'dv_cost_factor': env.dv_cost_factor,
+            'dw_cost_factor': env.dw_cost_factor,
+            'w_cost_factor': env.w_cost_factor,
+        }
+            
         # Reset or partially reset policy std-anneal progress after curriculum env change
         if hasattr(self, 'sac_model') and hasattr(self.sac_model, 'policy_net'):
             try:
@@ -298,29 +343,43 @@ class _RLforMultifirefly(animation_class.AnimationClass):
             except Exception as e:
                 print('Warning: failed to reset std-anneal progress:', e)
 
-        # Reset or partially reset SAC temperature (alpha) for auto-entropy after curriculum env change
+        # Softly reset SAC temperature (alpha) for auto-entropy after curriculum env change
         if hasattr(self, 'sac_model') and hasattr(self.sac_model, 'log_alpha'):
             try:
-                preserve = float(getattr(self, 'std_anneal_preserve_fraction', 0.05))
                 with torch.no_grad():
-                    # Move log_alpha toward its initialization (0.0 -> alpha=1.0)
-                    self.sac_model.log_alpha.mul_(preserve)
-                    # Keep within the same safety bounds used during updates
-                    self.sac_model.log_alpha.clamp_(min=-10.0, max=10.0)
-                    # Optionally reflect the change on a cached alpha if present
+                    alpha_reset_beta = getattr(self, 'alpha_reset_beta', 0.6)
+                    current_log_alpha = self.sac_model.log_alpha
+                    target_log_alpha = torch.zeros_like(current_log_alpha)
+                    alpha_before = getattr(self.sac_model, 'alpha', current_log_alpha.exp())
+                    new_log_alpha = alpha_reset_beta * current_log_alpha + (1 - alpha_reset_beta) * target_log_alpha
+                    self.sac_model.log_alpha.copy_(new_log_alpha)
                     if hasattr(self.sac_model, 'alpha'):
                         self.sac_model.alpha = self.sac_model.log_alpha.exp()
+                    alpha_after = getattr(self.sac_model, 'alpha', self.sac_model.log_alpha.exp())
+                # Clear gradients/state so temperature restarts cleanly
+                if getattr(self.sac_model, 'alpha_optimizer', None) is not None:
+                    try:
+                        self.sac_model.alpha_optimizer.zero_grad(set_to_none=True)
+                    except TypeError:
+                        self.sac_model.alpha_optimizer.zero_grad()
+                if getattr(self.sac_model.log_alpha, 'grad', None) is not None:
+                    self.sac_model.log_alpha.grad = None
             except Exception as e:
                 print('Warning: failed to reset entropy temperature (alpha):', e)
 
-        print('Current angular_terminal_vel:', env.angular_terminal_vel)
-        print('Current flash_on_interval:', env.flash_on_interval)
-        print('Current distance2center_cost:', env.distance2center_cost)
-        print('Current stop_vel_cost:', env.stop_vel_cost)
-        print('Current reward_boundary:', env.reward_boundary)
-        print('Current dv_cost_factor:', env.dv_cost_factor)
-        print('Current dw_cost_factor:', env.dw_cost_factor)
-        print('Current w_cost_factor:', env.w_cost_factor)
+        # Emit a compact stage summary dict
+        stage_summary = {'before': before, 'after': after, 'targets': targets}
+        try:
+            stage_summary['alpha_reset_beta'] = getattr(self, 'alpha_reset_beta', 0.6)
+            if 'alpha_before' in locals():
+                stage_summary['alpha_before'] = float(alpha_before.detach().cpu().mean())
+            if 'alpha_after' in locals():
+                stage_summary['alpha_after'] = float(alpha_after.detach().cpu().mean())
+            if hasattr(self, 'sac_model') and hasattr(self.sac_model, 'policy_net'):
+                stage_summary['policy_anneal_step'] = int(getattr(self.sac_model.policy_net, 'anneal_step', 0))
+        except Exception:
+            pass
+        print('Stage summary:', stage_summary)
 
         if agent_type is None:
             if hasattr(self.env, 'env'):

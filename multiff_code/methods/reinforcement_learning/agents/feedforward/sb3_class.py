@@ -152,7 +152,7 @@ class SB3forMultifirefly(rl_base_class._RLforMultifirefly):
             except ValueError as e:
                 print(f"Error message: {e}")
                 break
-            self._change_env_after_meeting_reward_threshold()
+            self._update_env_after_meeting_reward_threshold()
 
         # After all the conditions are met, train the agent once again to ensure performance (stop training with no improvement)
         # After curriculum ends, copy best from in-curriculum to post-curriculum

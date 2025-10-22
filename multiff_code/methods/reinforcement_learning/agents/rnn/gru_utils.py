@@ -30,6 +30,7 @@ class SAC_PolicyNetworkGRU(lstm_utils.PolicyNetworkBase):
         self.gru1 = nn.GRU(hidden_size, hidden_size)
         self.linear3 = nn.Linear(2*hidden_size, hidden_size)
         self.linear4 = nn.Linear(hidden_size, hidden_size)
+        self.dropout = nn.Dropout(p=0.2)
 
         self.mean_linear = nn.Linear(hidden_size, self._action_dim)
         self.mean_linear.weight.data.uniform_(-init_w, init_w)
@@ -52,7 +53,8 @@ class SAC_PolicyNetworkGRU(lstm_utils.PolicyNetworkBase):
         # branch 2
         gru_branch = torch.cat([state, last_action], -1)
         gru_branch = F.relu(self.linear2(gru_branch))
-        gru_branch, gru_hidden = self.gru1(gru_branch, hidden_in) 
+        gru_branch, gru_hidden = self.gru1(gru_branch, hidden_in)
+        gru_branch = self.dropout(gru_branch)
         # merged
         merged_branch=torch.cat([fc_branch, gru_branch], -1) 
         x = F.relu(self.linear3(merged_branch))
@@ -66,6 +68,10 @@ class SAC_PolicyNetworkGRU(lstm_utils.PolicyNetworkBase):
         
         return mean, log_std, gru_hidden
     
+    def _dev(self):
+        # Resolve the device from module parameters to avoid relying on globals
+        return next(self.parameters()).device
+
     def _std_scale(self):
         if self.std_anneal_steps <= 0:
             return 1.0
@@ -85,10 +91,10 @@ class SAC_PolicyNetworkGRU(lstm_utils.PolicyNetworkBase):
         log_std = torch.nan_to_num(log_std, nan=-5.0, posinf=2.0, neginf=-20.0)
         std = log_std.exp().clamp_min(1e-6) # avoid zero/NaN std
         
-        
+        dev = self._dev()
         normal = Normal(0, 1)
-        z = normal.sample(mean.shape)
-        pre_tanh = mean + std * z.to(device)
+        z = normal.sample(mean.shape).to(dev)
+        pre_tanh = mean + std * z
         pre_tanh = torch.nan_to_num(pre_tanh, nan=0.0)
         action_0 = torch.tanh(pre_tanh)  # TanhNormal distribution as actions; reparameterization trick
         action = self.action_range * action_0
@@ -103,8 +109,9 @@ class SAC_PolicyNetworkGRU(lstm_utils.PolicyNetworkBase):
         return action, log_prob, z, mean, log_std, hidden_out
 
     def get_action(self, state, last_action, hidden_in, deterministic=True):
-        state = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(device)  # increase 2 dims to match with training data
-        last_action = torch.FloatTensor(last_action).unsqueeze(0).unsqueeze(0).to(device)
+        dev = self._dev()
+        state = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(dev)  # increase 2 dims to match with training data
+        last_action = torch.FloatTensor(last_action).unsqueeze(0).unsqueeze(0).to(dev)
         mean, log_std, hidden_out = self.forward(state, last_action, hidden_in)
         mean = torch.nan_to_num(mean, nan=0.0, posinf=10.0, neginf=-10.0)
         std = torch.nan_to_num(log_std, nan=-5.0, posinf=2.0, neginf=-20.0).exp().clamp_min(1e-6)
@@ -114,7 +121,7 @@ class SAC_PolicyNetworkGRU(lstm_utils.PolicyNetworkBase):
             std = std * scale
         
         normal = Normal(0, 1)
-        z = normal.sample(mean.shape).to(device)
+        z = normal.sample(mean.shape).to(dev)
         sampled = self.action_range * torch.tanh(mean + std * z)
         action_tensor = self.action_range * torch.tanh(mean) if deterministic else sampled
         action = torch.nan_to_num(action_tensor, nan=0.0).detach().cpu().numpy()
@@ -218,13 +225,12 @@ class QNetworkGRU(lstm_utils.QNetworkBase):
         super().__init__(state_space, action_space, activation)
         self.hidden_dim = hidden_dim
 
-        self.linear1 = nn.Linear(self._state_dim+self._action_dim, hidden_dim)
-        self.linear2 = nn.Linear(self._state_dim+self._action_dim, hidden_dim)
+        # Single-branch GRU critic to match LSTM2 structure
+        self.linear1 = nn.Linear(self._state_dim + 2 * self._action_dim, hidden_dim)
         self.gru1 = nn.GRU(hidden_dim, hidden_dim)
-        self.linear3 = nn.Linear(2*hidden_dim, hidden_dim)
-        self.linear4 = nn.Linear(hidden_dim, 1)
-        # weights initialization
-        self.linear4.apply(lstm_utils.linear_weights_init)
+        self.linear2 = nn.Linear(hidden_dim, 1)
+        self.linear2.apply(lstm_utils.linear_weights_init)
+        self.dropout = nn.Dropout(p=0.2)
         
     def forward(self, state, action, last_action, hidden_in):
         """ 
@@ -234,20 +240,14 @@ class QNetworkGRU(lstm_utils.QNetworkBase):
         state = state.permute(1,0,2)
         action = action.permute(1,0,2)
         last_action = last_action.permute(1,0,2)
-        # branch 1
-        fc_branch = torch.cat([state, action], -1) 
-        fc_branch = self.activation(self.linear1(fc_branch))
-        # branch 2
-        gru_branch = torch.cat([state, last_action], -1) 
-        gru_branch = self.activation(self.linear2(gru_branch))  # linear layer for 3d input only applied on the last dim
-        gru_branch, gru_hidden = self.gru1(gru_branch, hidden_in) 
-        # merged
-        merged_branch=torch.cat([fc_branch, gru_branch], -1) 
-
-        x = self.activation(self.linear3(merged_branch))
-        x = self.linear4(x)
+        # single branch
+        x = torch.cat([state, action, last_action], -1)
+        x = self.activation(self.linear1(x))
+        x, gru_hidden = self.gru1(x, hidden_in)
+        x = self.dropout(x)
+        x = self.linear2(x)
         x = x.permute(1,0,2)  # back to same axes as input    
-        return x, gru_hidden    # gru_hidden is actually tuple: (hidden, cell)  
+        return x, gru_hidden
 
 
 
@@ -303,9 +303,9 @@ class GRU_SAC_Trainer():
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=alpha_lr)
 
     
-    def update(self, batch_size, reward_scale=0.001, auto_entropy=True, target_entropy=-2, gamma=0.975, soft_tau=1e-2):
+    def update(self, batch_size, reward_scale=1, auto_entropy=True, target_entropy=-2, gamma=0.975, soft_tau=1e-2):
         hidden_in, hidden_out, state, action, last_action, reward, next_state, done = self.replay_buffer.sample(
-            batch_size, to_torch=True, device=device, seq_len=self.seq_len, burn_in=self.burn_in, random_window=True
+            batch_size, to_torch=True, device=self.device, seq_len=self.seq_len, burn_in=self.burn_in, random_window=True
         )
 
         batch_size = self.batch_size
@@ -439,7 +439,9 @@ def _train_gru_episode(env, sac_model, max_steps_per_eps):
         'state': [], 'action': [], 'last_action': [], 'reward': [],
         'next_state': [], 'done': []
     }
-    hidden_out = _initialize_gru_hidden(sac_model.hidden_dim, device)
+    # ensure hidden state is on the same device as the policy network
+    dev = next(sac_model.policy_net.parameters()).device
+    hidden_out = _initialize_gru_hidden(sac_model.hidden_dim, dev)
     ini_hidden_in, ini_hidden_out = None, None
 
     for step in range(max_steps_per_eps):
@@ -448,7 +450,7 @@ def _train_gru_episode(env, sac_model, max_steps_per_eps):
         if not np.isfinite(state).all():
             state = np.nan_to_num(state, nan=0.0, posinf=0.0, neginf=0.0)
         if (not torch.isfinite(hidden_in).all()):
-            hidden_in = _initialize_gru_hidden(sac_model.hidden_dim, device)
+            hidden_in = _initialize_gru_hidden(sac_model.hidden_dim, dev)
         # Select action without tracking gradients and detach hidden state to avoid graph growth
         with torch.no_grad():
             # use current policy anneal step snapshot
@@ -502,7 +504,8 @@ def evaluate_gru_agent(env, sac_model, max_steps_per_eps, num_eval_episodes, det
         for _ in range(num_eval_episodes):
             state, _ = env.reset()
             last_action = env.action_space.sample()
-            hidden_out = _initialize_gru_hidden(sac_model.hidden_dim, device)
+            dev = next(sac_model.policy_net.parameters()).device
+            hidden_out = _initialize_gru_hidden(sac_model.hidden_dim, dev)
             
             epi_ctx = {}
             numerics_cfg = lstm_utils.NumericsConfig(
@@ -515,7 +518,7 @@ def evaluate_gru_agent(env, sac_model, max_steps_per_eps, num_eval_episodes, det
                     
                 if (not torch.isfinite(hidden_in).all()):
                     lstm_utils._maybe_warn_nans(True, 'eval.hidden_in', epi_ctx, numerics_cfg)
-                    hidden_in = _initialize_gru_hidden(sac_model.hidden_dim, device)
+                    hidden_in = _initialize_gru_hidden(sac_model.hidden_dim, dev)
 
                 action, hidden_out = sac_model.policy_net.get_action(
                     state, last_action, hidden_in, deterministic=deterministic)
