@@ -527,10 +527,6 @@ class _RLforMultifirefly(animation_class.AnimationClass):
             self.ff_dataframe = pd.read_csv(self.ff_dataframe_path).drop(
                 columns=["Unnamed: 0", "Unnamed: 0.1"], errors='ignore')
         else:
-            print('Warnings: currently, only ff in obs at each step are used in ff_dataframe. All ff are labeled \'visible\' regardless of their actual time since last visible.')
-            if str(getattr(self, 'agent_type', 'sb3')).lower() in ('lstm', 'gru', 'rnn'):
-                print('It is possible that an RNN agent has memory of past ff; code may need updates to reflect that. For planning analysis, info of in-memory ff is not needed.')
-
             self.make_ff_dataframe_from_ff_in_obs_df()
             # base_processing_class.BaseProcessing.make_or_retrieve_ff_dataframe(self, exists_ok=False, save_into_h5=False)
             print("made ff_dataframe")
@@ -542,7 +538,6 @@ class _RLforMultifirefly(animation_class.AnimationClass):
 
     def make_ff_dataframe_from_ff_in_obs_df(self):
         self.ff_dataframe = self.ff_in_obs_df.copy()
-        # self.ff_dataframe['visible'] = 1
 
         make_ff_dataframe.add_essential_columns_to_ff_dataframe(
             self.ff_dataframe, self.monkey_information, self.ff_real_position_sorted)
@@ -607,8 +602,9 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self.streamline_making_animation(currentTrial_for_animation=currentTrial_for_animation, num_trials_for_animation=num_trials_for_animation,
                                          duration=duration, n_steps=n_steps, file_name=None)
 
-    def streamline_making_animation(self, currentTrial_for_animation=None, num_trials_for_animation=None, duration=[10, 40], n_steps=8000, file_name=None, video_dir=None):
-        self.collect_data(n_steps=n_steps)
+    def streamline_making_animation(self, currentTrial_for_animation=None, num_trials_for_animation=None, duration=[10, 40], n_steps=8000, file_name=None, video_dir=None,
+                                    data_exists_ok=False):
+        self.collect_data(n_steps=n_steps, exists_ok=data_exists_ok)
         # if len(self.ff_caught_T_new) >= currentTrial_for_animation:
         self.make_animation(currentTrial_for_animation=currentTrial_for_animation, num_trials_for_animation=num_trials_for_animation,
                             duration=duration, file_name=file_name, video_dir=video_dir)
@@ -800,8 +796,12 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         self.minimal_current_info = self.get_minimum_current_info()
         retrieved_current_info = self.family_of_agents_log.loc[self.current_info_condition]
 
-        exist_best_model = exists(os.path.join(
-            self.model_folder_name, 'best_model.zip'))
+        # Detect existence of a best model for both SB3 (.zip) and RNN (manifest) schemes
+        candidate_paths = [
+            os.path.join(self.model_folder_name, 'best_model.zip'),
+            os.path.join(self.model_folder_name, 'checkpoint_manifest.json'),
+        ]
+        exist_best_model = any(exists(p) for p in candidate_paths)
         finished_training = np.any(retrieved_current_info['finished_training'])
         print('exist_best_model', exist_best_model)
         print('finished_training', finished_training)

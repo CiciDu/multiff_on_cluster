@@ -5,6 +5,7 @@ from reinforcement_learning.base_classes import rl_base_utils, rl_base_class
 from reinforcement_learning.agents.rnn import lstm_utils
 from reinforcement_learning.agents.rnn import gru_utils
 from reinforcement_learning.base_classes import env_utils
+from reinforcement_learning.base_classes import run_logger
 
 import os
 import matplotlib.pyplot as plt
@@ -24,7 +25,7 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
 
     def __init__(self,
-                 overall_folder='RL_models/LSTM_stored_models/all_agents/gen_0/',
+                 overall_folder='multiff_analysis/RL_models/LSTM_stored_models/all_agents/gen_0/',
                  model_folder_name=None,
                  add_date_to_model_folder_name=False,
                  max_in_memory_time=1,
@@ -41,11 +42,11 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
         self.agent_type = 'lstm'
         self.algorithm_name = 'lstm_sac'
         self.model_files = ['lstm_q1', 'lstm_q2', 'lstm_policy']
-        
+
         self.replay_buffer_class = lstm_utils.ReplayBufferLSTM2
         self.trainer_class = lstm_utils.LSTM_SAC_Trainer
         self.env_class = env_for_rnn.EnvForRNN
- 
+
         self.default_env_kwargs = env_utils.get_env_default_kwargs(
             self.env_class)
         self.input_env_kwargs = {
@@ -53,15 +54,17 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             **self.class_instance_env_kwargs,
             **self.additional_env_kwargs
         }
-
         
+        self.seq_len = seq_len
+        self.burn_in = burn_in
+
     def prepare_agent_params(self, agent_params_already_set_ok, **kwargs):
 
         # Ensure environment exists before constructing agent-dependent params
         if not hasattr(self, 'env'):
             self.make_env(**self.input_env_kwargs)
 
-        if agent_params_already_set_ok & (self.agent_params is not None):
+        if agent_params_already_set_ok and (self.agent_params is not None):
             existing_agent_params = self.agent_params.copy()
         else:
             existing_agent_params = {}
@@ -77,11 +80,11 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             "soft_q_lr": kwargs.get('soft_q_lr', 0.0015),
             "policy_lr": kwargs.get('policy_lr', 0.003),
             "alpha_lr": kwargs.get('alpha_lr', 0.002),
-            "seq_len": kwargs.get('seq_len', 256),
-            "burn_in": kwargs.get('burn_in', 32),
+            "seq_len": kwargs.get('seq_len', self.seq_len),
+            "burn_in": kwargs.get('burn_in', self.burn_in),
             "batch_size": kwargs.get('batch_size', 8),
             "update_itr": kwargs.get('update_itr', 1),
-            "reward_scale": kwargs.get('reward_scale', 0.5), 
+            "reward_scale": kwargs.get('reward_scale', 0.5),
             "target_entropy": kwargs.get('target_entropy', - self.env.action_space.shape[0]),
             "soft_tau": kwargs.get('soft_tau', 0.015),
             "train_freq": kwargs.get('train_freq', 10),
@@ -91,15 +94,13 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
 
         self.agent_params.update(existing_agent_params)
         self.agent_params.update(kwargs)
-            
-        
 
     def make_agent(self,
                    agent_params_already_set_ok=True,
                    **kwargs):
 
         self.prepare_agent_params(agent_params_already_set_ok, **kwargs)
-        
+
         self.replay_buffer = self.replay_buffer_class(
             self.agent_params['replay_buffer_size'])
         self.agent_params['replay_buffer'] = self.replay_buffer
@@ -114,44 +115,110 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
     def _make_agent_for_curriculum_training(self):
         self.make_agent()
 
-    def _use_while_loop_for_curriculum_training(self, eval_eps_freq=20, num_eval_episodes=2):
-        while (
-              (self.env.flash_on_interval > self.input_env_kwargs['flash_on_interval']) or
-              (self.env.angular_terminal_vel > self.input_env_kwargs['angular_terminal_vel']) or
-              (self.env.reward_boundary > self.input_env_kwargs['reward_boundary']) or
-              (self.env.distance2center_cost > self.input_env_kwargs['distance2center_cost']) or
-              (self.env.stop_vel_cost > self.input_env_kwargs['stop_vel_cost']) or
-              (self.env.dv_cost_factor < self.input_env_kwargs['dv_cost_factor']) or
-              (self.env.dw_cost_factor < self.input_env_kwargs['dw_cost_factor']) or
-              (self.env.w_cost_factor < self.input_env_kwargs['w_cost_factor'])
-        ):
+    def _use_while_loop_for_curriculum_training(self, eval_eps_freq=20, num_eval_episodes=2, max_curriculum_stages=10):
+        stage = 0
+        finished_curriculum = False
+        log_path = os.path.join(self.best_model_in_curriculum_dir, 'curriculum_log.csv')
 
+        # Prepare empty log DataFrame
+        columns = [
+            'stage', 'reward_threshold', 'best_avg_reward',
+            'flash_on_interval', 'angular_terminal_vel', 'reward_boundary',
+            'distance2center_cost', 'stop_vel_cost',
+            'dv_cost_factor', 'dw_cost_factor', 'w_cost_factor',
+            'finished_curriculum'
+        ]
+        if not os.path.exists(log_path):
+            pd.DataFrame(columns=columns).to_csv(log_path, index=False)
+
+        while True:
+            stage += 1
             gc.collect()
+
+            # --- Compute dynamic reward threshold ---
             reward_threshold = rl_base_utils.calculate_reward_threshold_for_curriculum_training(
                 self.env, n_eval_episodes=num_eval_episodes, ff_caught_rate_threshold=0.1)
-            print(
-                'Current reward_threshold to progress in curriculum training:', reward_threshold)
-            # reward_threshold = 1000
+            print(f'[Stage {stage}] Current reward threshold: {reward_threshold:.2f}')
+
+            # --- Train under current environment conditions ---
             self.regular_training(eval_eps_freq=eval_eps_freq, num_eval_episodes=num_eval_episodes,
-                                  reward_threshold_to_stop_on=reward_threshold,
-                                  dir_name=self.best_model_in_curriculum_dir)
+                                reward_threshold_to_stop_on=reward_threshold,
+                                dir_name=self.best_model_in_curriculum_dir)
+
+            # --- Check progress ---
             if self.best_avg_reward < reward_threshold:
-                raise ValueError(f'Best average reward {self.best_avg_reward} is less than reward threshold {reward_threshold}. Can\'t progress in curriculum training.')
-            print(f'Best average reward: {self.best_avg_reward}, with reward threshold: {reward_threshold}. Moving on to the next stage of curriculum training.')
+                print(f'[Stage {stage}] Warning: best reward {self.best_avg_reward:.2f} < threshold {reward_threshold:.2f}. Retrying...')
+                continue
+
+            print(f'[Stage {stage}] Progressed: best reward {self.best_avg_reward:.2f} ≥ threshold {reward_threshold:.2f}')
+
+            # --- Log this stage ---
+            stage_payload = {
+                'stage': stage,
+                'reward_threshold': reward_threshold,
+                'best_avg_reward': self.best_avg_reward,
+                'flash_on_interval': self.env.flash_on_interval,
+                'angular_terminal_vel': self.env.angular_terminal_vel,
+                'reward_boundary': self.env.reward_boundary,
+                'distance2center_cost': self.env.distance2center_cost,
+                'stop_vel_cost': self.env.stop_vel_cost,
+                'dv_cost_factor': self.env.dv_cost_factor,
+                'dw_cost_factor': self.env.dw_cost_factor,
+                'w_cost_factor': self.env.w_cost_factor,
+                'finished_curriculum': finished_curriculum
+            }
+            # Per-agent CSV for backward compatibility
+            try:
+                pd.DataFrame([stage_payload]).to_csv(log_path, mode='a', header=False, index=False)
+            except Exception:
+                pass
+            # Aggregate curriculum log across runs using common logger
+            try:
+                sweep_params = getattr(self, 'sweep_params', {})
+                run_logger.log_curriculum_stage(self.overall_folder, agent_type=getattr(self, 'agent_type', 'rnn'), sweep_params=sweep_params, stage_payload=stage_payload)
+            except Exception as e:
+                print('[logger] failed to log curriculum stage:', e)
+
+            # --- Exit control ---
+            if finished_curriculum:
+                print(f'[Stage {stage}] Completed final training with target environment. Exiting curriculum loop.')
+                break
+
+            # --- Update environment for next stage ---
             self._update_env_after_meeting_reward_threshold()
 
-        # after all condition is met, train the agent once more until it reaches the desired performance
+            if all([
+                self.env.flash_on_interval == self.input_env_kwargs['flash_on_interval'],
+                self.env.angular_terminal_vel == self.input_env_kwargs['angular_terminal_vel'],
+                self.env.reward_boundary == self.input_env_kwargs['reward_boundary'],
+                self.env.distance2center_cost == self.input_env_kwargs['distance2center_cost'],
+                self.env.stop_vel_cost == self.input_env_kwargs['stop_vel_cost'],
+                self.env.dv_cost_factor == self.input_env_kwargs['dv_cost_factor'],
+                self.env.dw_cost_factor == self.input_env_kwargs['dw_cost_factor'],
+                self.env.w_cost_factor == self.input_env_kwargs['w_cost_factor']
+            ]):
+                print(f'[Stage {stage}] All curriculum conditions met — running one more stage before exit.')
+                finished_curriculum = True
+
+            if stage >= max_curriculum_stages:
+                raise RuntimeError('Curriculum did not converge within the maximum allowed stages.')
+
+        # --- Final post-curriculum training ---
         os.makedirs(self.best_model_postcurriculum_dir, exist_ok=True)
         self.make_env(**self.input_env_kwargs)
         self.load_best_model_in_curriculum(load_replay_buffer=True)
 
         reward_threshold = rl_base_utils.calculate_reward_threshold_for_curriculum_training(
             self.env, n_eval_episodes=num_eval_episodes, ff_caught_rate_threshold=0.1)
-        self.regular_training(eval_eps_freq=eval_eps_freq, num_eval_episodes=num_eval_episodes,
-                              reward_threshold_to_stop_on=reward_threshold, 
-                              dir_name=self.best_model_postcurriculum_dir)
-        print('reward_threshold:', reward_threshold)
 
+        self.regular_training(eval_eps_freq=eval_eps_freq, num_eval_episodes=num_eval_episodes,
+                            reward_threshold_to_stop_on=reward_threshold,
+                            dir_name=self.best_model_postcurriculum_dir)
+
+        if self.best_avg_reward >= reward_threshold:
+            print('Finished curriculum training. Reached final post-curriculum reward_threshold:', reward_threshold)
+        else:
+            print('After curriculum training, failed to reach final post-curriculum reward_threshold:', reward_threshold)
         self.load_best_model_postcurriculum(load_replay_buffer=True)
 
 
@@ -163,7 +230,6 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             self.sac_model, whether_save_replay_buffer=whether_save_replay_buffer, dir_name=dir_name)
         # Write checkpoint manifest similar to SB3
         self.write_checkpoint_manifest(dir_name)
-
 
     def write_checkpoint_manifest(self, dir_name):
         rl_base_utils.write_checkpoint(dir_name, {
@@ -177,7 +243,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
         try:
             manifest = rl_base_utils.read_checkpoint_manifest(dir_name)
         except Exception as e:
-            raise ValueError(f"Failed to load agent from {dir_name} because of failure to load checkpoint manifest")
+            raise ValueError(
+                f"Failed to load agent from {dir_name} because of failure to load checkpoint manifest")
         env_params = None
         if isinstance(manifest, dict):
             env_params = manifest.get('env_params')
@@ -212,7 +279,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             self.sac_model.replay_buffer = self.replay_buffer
             print(
                 f'Loaded replay buffer with length {len(self.sac_model.replay_buffer)}')
-        
+
         self.loaded_agent_dir = dir_name
         return
 
@@ -228,7 +295,6 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
 
     def make_animation(self, **kwargs):
         super().make_animation(max_num_frames=None, **kwargs)
-
 
     def regular_training(self, num_train_episodes=10000, eval_eps_freq=15, num_eval_episodes=2,
                          print_episode_reward=True, reward_threshold_to_stop_on=None, dir_name=None):
@@ -247,7 +313,6 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
         if dir_name is not None:
             self.write_checkpoint_manifest(dir_name)
         return self.best_avg_reward
-    
 
     def _common_train_loop(self, env, train_episode_fn, eval_agent_fn,
                            num_train_episodes=10000, eval_eps_freq=15, max_steps_per_eps=512,
@@ -272,7 +337,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             self.list_of_alpha = []
 
         for eps in range(num_train_episodes):
-            episode_reward = train_episode_fn(env, self.sac_model, max_steps_per_eps)
+            episode_reward = train_episode_fn(
+                env, self.sac_model, max_steps_per_eps)
             self.list_of_epi_rewards.append(episode_reward)
 
             if track_alpha:
@@ -292,7 +358,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                 avg_reward = eval_agent_fn(
                     env, self.sac_model, max_steps_per_eps, num_eval_episodes, deterministic=True)
                 print(f"Current average evaluation reward: {avg_reward}")
-                print(f"Best average evaluation reward: {self.best_avg_reward}")
+                print(
+                    f"Best average evaluation reward: {self.best_avg_reward}")
 
                 self.eval_rewards.append(avg_reward)
                 print('Last 10 evaluation rewards:', self.eval_rewards[-10:])
@@ -311,7 +378,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                     if reward_threshold_to_stop_on is not None and \
                             self.best_avg_reward >= reward_threshold_to_stop_on:
                         break
-                    
+
             if print_episode_reward:
                 print(f'Episode: {eps}, Episode Reward: {episode_reward}')
                 print('============================================================')
@@ -321,7 +388,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             # to avoid mismatched lengths when constructing the DataFrame.
             alpha_episodes = self.list_of_epi_for_alpha
             rewards_at_alpha_episodes = [
-                self.list_of_epi_rewards[i] if i < len(self.list_of_epi_rewards) else np.nan
+                self.list_of_epi_rewards[i] if i < len(
+                    self.list_of_epi_rewards) else np.nan
                 for i in alpha_episodes
             ]
             alpha_dict = {
@@ -331,16 +399,17 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             }
             self.alpha_df = pd.DataFrame(alpha_dict)
 
-
     def train_rnn_agent(self, env, **kwargs):
         self._common_train_loop(
             env,
             train_episode_fn=lstm_utils._train_episode,
             eval_agent_fn=lstm_utils.evaluate_lstm_agent,
-            save_fn=lambda model, dir_name: lstm_utils.save_best_model(model, dir_name=dir_name),
+            save_fn=lambda model, dir_name: lstm_utils.save_best_model(
+                model, dir_name=dir_name),
             track_alpha=True,
             **kwargs
         )
+
 
 class CPU_Unpickler(pickle.Unpickler):
     def find_class(self, module, name):

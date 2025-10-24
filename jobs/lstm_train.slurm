@@ -36,7 +36,7 @@ MAX_IN_MEMORY_TIME=${MAX_IN_MEMORY_TIME_LIST[$MEM_IDX]}
 # ---------------------
 # Create a unique folder name
 # ---------------------
-BASE_DIR="RL_models/LSTM_stored_models/all_agents"
+BASE_DIR="multiff_analysis/RL_models/LSTM_stored_models/all_agents"
 RUN_NAME="lr${LR}_numobs${NUM_OBS_FF}_mem${MAX_IN_MEMORY_TIME}_job${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 OVERALL_FOLDER="${BASE_DIR}/${RUN_NAME}"
 
@@ -48,9 +48,7 @@ mkdir -p "$OVERALL_FOLDER"
 echo "[jobinfo] Starting LSTM training for LR=${LR}, NUM_OBS_FF=${NUM_OBS_FF}, MAX_IN_MEMORY_TIME=${MAX_IN_MEMORY_TIME}"
 srun python -u multiff_analysis/multiff_code/notebooks/reinforcement_learning/LSTM_training.py \
   --overall-folder "$OVERALL_FOLDER" \
-  --dt 0.1 \
   --max-in-memory-time "$MAX_IN_MEMORY_TIME" \
-  --angular-terminal-vel 0.01 \
   --lr "$LR" \
   --num-obs-ff "$NUM_OBS_FF"
 

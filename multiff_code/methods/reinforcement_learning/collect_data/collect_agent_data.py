@@ -272,10 +272,6 @@ def collect_agent_data_func(env, sac_model, n_steps=15000,
         time, monkey_x, monkey_y, speed, ang_speed, is_stop,monkey_angle, env.dt
     )
     monkey_information['point_index'] = range(len(monkey_information))
-    monkey_information['monkey_speeddummy'] = (
-        (monkey_information['speed'] > env.linear_terminal_vel * 200) |
-        (np.abs(monkey_information['ang_speed']) > env.angular_terminal_vel * pi / 2)
-    ).astype(int)
 
     process_monkey_information.add_more_columns_to_monkey_information(monkey_information)
 
@@ -380,7 +376,7 @@ def pack_monkey_information(time, monkey_x, monkey_y, speed, ang_speed, is_stop,
         'monkey_y': monkey_y,
         'speed': speed,
         'ang_speed': ang_speed,
-        'monkey_speeddummy': 1 - is_stop,
+        'monkey_speeddummy': [1-i for i in is_stop],
         'monkey_angle': monkey_angle,
     }
 

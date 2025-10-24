@@ -354,7 +354,7 @@ class MultiFF(gymnasium.Env):
             self, 'action', np.zeros(2, dtype=np.float32))
         # work on a copy and keep dtype consistent
         action = np.asarray(action, dtype=np.float32).copy()
-        self.action = self._add_noise_to_action(action)
+        self.action = self._process_action(action)
         # if action[1] < 1:
         #     print('time: ', round(self.time, 2), 'action: ', action)
 
@@ -389,10 +389,7 @@ class MultiFF(gymnasium.Env):
         return self.obs, reward, terminated, truncated, {}
 
 
-    def _add_noise_to_action(self, action):
-        '''
-        add noise to the action
-        '''
+    def _process_action(self, action):
         new_action = np.empty_like(action, dtype=np.float32)
         if (abs(action[0]) <= self.angular_terminal_vel) and ((action[1] / 2 + 0.5) <= self.linear_terminal_vel):
             self.vnoise = 0.0
@@ -402,7 +399,7 @@ class MultiFF(gymnasium.Env):
             self.w_stop_deviance = max(0, abs(action[0]) - 0.05)
             # set linear velocity to 0
             new_action[0] = np.clip(float(action[0]), -1.0, 1.0)
-            new_action[1] = float(0)
+            new_action[1] = float(-1)
         else:
             self.vnoise = float(self.rng.normal(0.0, self.v_noise_std))
             self.wnoise = float(self.rng.normal(0.0, self.w_noise_std))
@@ -425,6 +422,7 @@ class MultiFF(gymnasium.Env):
         # calculate the change in the agent's position in one time step
         ah = self.agentheading
         v = self.v
+        print('v: ', v)
         self.dx = np.cos(ah) * v
         self.dy = np.sin(ah) * v
         # update the position and direction of the agent
