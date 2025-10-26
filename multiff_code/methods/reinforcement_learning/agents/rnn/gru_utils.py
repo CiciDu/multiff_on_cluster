@@ -21,7 +21,7 @@ class SAC_PolicyNetworkGRU(lstm_utils.PolicyNetworkBase):
         self.hidden_size = hidden_size
         # Exploration std annealing is driven externally by global_step via set_anneal_step
         self.anneal_step = 0
-        self.std_anneal_min = 0.1   # final multiplicative scale on std
+        self.std_anneal_min = 1.0   # final multiplicative scale on std
         self.std_anneal_max = 1.0   # initial multiplicative scale on std
         self.std_anneal_steps = 1000000  # steps to reach min scale
 
@@ -266,6 +266,9 @@ class GRU_SAC_Trainer():
         self.seq_len = kwargs.get('seq_len', None)
         self.burn_in = kwargs.get('burn_in', 0)
         self.device = kwargs.get('device', "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),)
+        # Alpha (entropy temperature) clipping bounds
+        self.alpha_min = kwargs.get('alpha_min', 1e-3)
+        self.alpha_max = kwargs.get('alpha_max', 4.0)
 
 
         state_space = kwargs.get('state_space')
@@ -361,9 +364,13 @@ class GRU_SAC_Trainer():
             # Clamp temperature to avoid runaway
             with torch.no_grad():
                 self.log_alpha.clamp_(min=-10.0, max=10.0)
-            self.alpha = self.log_alpha.exp()
+            # Compute alpha from log_alpha and clip to configured bounds
+            self.alpha = self.log_alpha.exp().detach()
+            self.alpha.clamp_(min=self.alpha_min, max=self.alpha_max)
         else:
-            self.alpha = 1.
+            # Ensure alpha is a tensor on device and clipped
+            self.alpha = torch.as_tensor(1.0, device=self.device, dtype=torch.float32)
+            self.alpha.clamp_(min=self.alpha_min, max=self.alpha_max)
             alpha_loss = 0
 
     # Training Q Function

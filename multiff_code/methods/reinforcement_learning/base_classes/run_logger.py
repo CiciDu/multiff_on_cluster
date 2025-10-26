@@ -21,15 +21,46 @@ def _ensure_csv(path: str, columns):
         pd.DataFrame(columns=columns).to_csv(path, index=False)
 
 
+def _logs_root_from_overall(overall_folder: str) -> str:
+    # Walk up until we find multiff_analysis, then use its logs/ subdir
+    p = os.path.abspath(os.path.expanduser(overall_folder))
+    cur = p
+    while True:
+        if os.path.basename(cur) == 'multiff_analysis':
+            return os.path.join(cur, 'logs')
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            # Fallback: sibling logs next to overall_folder
+            return os.path.join(os.path.dirname(p), 'logs')
+        cur = parent
+
+
 def _runs_log_path(overall_folder: str) -> str:
-    # Aggregate across runs inside the parent all_agents directory
-    parent_dir = os.path.abspath(os.path.join(os.path.expanduser(overall_folder), os.pardir))
-    return os.path.join(parent_dir, 'runs_log.csv')
+    logs_root = _logs_root_from_overall(overall_folder)
+    suffix = _run_suffix()
+    return os.path.join(logs_root, f'runs_log_{suffix}.csv')
 
 
 def _curriculum_log_path(overall_folder: str) -> str:
-    parent_dir = os.path.abspath(os.path.join(os.path.expanduser(overall_folder), os.pardir))
-    return os.path.join(parent_dir, 'curriculum_stages.csv')
+    logs_root = _logs_root_from_overall(overall_folder)
+    suffix = _run_suffix()
+    return os.path.join(logs_root, f'curriculum_stages_{suffix}.csv')
+
+
+def _run_suffix() -> str:
+    job_id = os.getenv('SLURM_ARRAY_JOB_ID') or os.getenv('SLURM_JOB_ID')
+    task_id = os.getenv('SLURM_ARRAY_TASK_ID')
+    if job_id and task_id:
+        return f'job{job_id}_task{task_id}'
+    if job_id:
+        return f'job{job_id}'
+    # Fallback: timestamp + pid to avoid collisions
+    try:
+        ts = time_package.strftime('%Y%m%d-%H%M%S', time_package.localtime())
+    except Exception:
+        ts = 'na'
+    pid = os.getpid()
+    return f'local_{ts}_{pid}'
 
 
 def _flatten_dict(prefix, d):
@@ -83,6 +114,7 @@ def log_run_end(overall_folder: str, agent_type: str, sweep_params: dict, status
         df = pd.DataFrame()
     df = pd.concat([df, pd.DataFrame([record])], ignore_index=True)
     df.to_csv(path, index=False)
+    print('run_end logged to:', path)
 
 
 def log_curriculum_stage(overall_folder: str, agent_type: str, sweep_params: dict, stage_payload: dict):
@@ -104,6 +136,7 @@ def log_curriculum_stage(overall_folder: str, agent_type: str, sweep_params: dic
         df = pd.DataFrame()
     df = pd.concat([df, pd.DataFrame([record])], ignore_index=True)
     df.to_csv(path, index=False)
+    print('curriculum_stage logged to:', path)
 
 
 def collect_model_to_job_dir(overall_folder: str, source_dir: str, preferred_name: str = None, force_copy: bool = False):

@@ -7,6 +7,7 @@ from reinforcement_learning.agents.feedforward import env_for_sb3
 from reinforcement_learning.collect_data import collect_agent_data, process_agent_data
 from reinforcement_learning.agents.feedforward import interpret_neural_network, sb3_utils
 from reinforcement_learning.base_classes import rl_base_utils
+from reinforcement_learning.base_classes import run_logger
 from decision_making_analysis.compare_GUAT_and_TAFT import find_GUAT_or_TAFT_trials
 from reinforcement_learning.base_classes import base_env
 from reinforcement_learning.base_classes import env_utils
@@ -46,7 +47,7 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                  distance2center_cost=0,
                  stop_vel_cost=50,
                  data_name='data_0',
-                 std_anneal_preserve_fraction=0.05,
+                 std_anneal_preserve_fraction=1,
                  **additional_env_kwargs):
 
         self.player = "agent"
@@ -255,6 +256,88 @@ class _RLforMultifirefly(animation_class.AnimationClass):
         else:
             self.env = env
 
+    def _prune_or_clear_replay_buffer(self, keep_fraction: float = 0.2):
+        """
+        Prune or clear replay buffer to avoid stale data after curriculum stage change.
+
+        Behavior:
+          - If a buffer exists, retain the most recent keep_fraction (default 20%).
+          - Handles both episode-list buffers (LSTM/GRU) and array-based buffers (FF attention).
+          - If keep_fraction <= 0, clears the buffer completely.
+        """
+        try:
+            rb = None
+            # Find replay buffer on sac_model or self
+            if hasattr(self, 'sac_model') and hasattr(self.sac_model, 'replay_buffer'):
+                rb = self.sac_model.replay_buffer
+            elif hasattr(self, 'replay'):
+                # FF attention agent uses self.replay
+                rb = getattr(self, 'replay', None)
+            elif hasattr(self, 'replay_buffer'):
+                rb = getattr(self, 'replay_buffer', None)
+
+            if rb is None:
+                print('No replay buffer found to prune/clear')
+                return
+
+            # Episode-list style: has attribute 'buffer' as list
+            if hasattr(rb, 'buffer') and isinstance(getattr(rb, 'buffer'), list):
+                buf_list = rb.buffer
+                n = len(buf_list)
+                if n == 0:
+                    return
+                if keep_fraction <= 0:
+                    rb.buffer = []
+                    rb.position = 0 if hasattr(rb, 'position') else 0
+                    print('Cleared episode replay buffer')
+                    return
+                k = max(1, int(n * float(keep_fraction)))
+                # Keep the most recent k episodes according to ring-buffer semantics
+                if hasattr(rb, 'position'):
+                    pos = int(rb.position)
+                    # reconstruct chronological order from ring buffer
+                    ordered = buf_list[pos:] + buf_list[:pos]
+                    trimmed = ordered[-k:]
+                    rb.buffer = trimmed
+                    rb.position = len(trimmed) % max(1, getattr(rb, 'capacity', len(trimmed)))
+                else:
+                    rb.buffer = buf_list[-k:]
+                print(f'Pruned episode replay buffer to last {k} episodes (~{int(keep_fraction*100)}%)')
+                return
+
+            # Array-based style (FF): has numpy arrays and size/ptr
+            if all(hasattr(rb, attr) for attr in ('obs', 'next_obs', 'action', 'reward', 'done')) and hasattr(rb, 'size'):
+                size = int(getattr(rb, 'size', 0))
+                if size <= 0:
+                    return
+                if keep_fraction <= 0:
+                    # reset size and pointer only; arrays can remain allocated
+                    rb.size = 0
+                    if hasattr(rb, 'ptr'):
+                        rb.ptr = 0
+                    print('Cleared array replay buffer (size=0)')
+                    return
+                k = max(1, int(size * float(keep_fraction)))
+                # compute indices of last k transitions respecting circular buffer
+                ptr = int(getattr(rb, 'ptr', size))
+                idx = (np.arange(size - k, size) + ptr) % max(1, getattr(rb, 'capacity', size))
+                # compact into front of arrays
+                rb.obs[:k] = rb.obs[idx]
+                rb.next_obs[:k] = rb.next_obs[idx]
+                rb.action[:k] = rb.action[idx]
+                rb.reward[:k] = rb.reward[idx]
+                rb.done[:k] = rb.done[idx]
+                rb.size = k
+                rb.ptr = k % max(1, getattr(rb, 'capacity', k))
+                print(f'Pruned array replay buffer to last {k} steps (~{int(keep_fraction*100)}%)')
+                return
+
+            print('Replay buffer format not recognized; skipping prune')
+        except Exception as e:
+            print('Warning: failed to prune/clear replay buffer:', e)
+
+    
+    # Wire pruning after curriculum env updates
     def _update_env_after_meeting_reward_threshold(self):
         
         print('Updating env after meeting reward threshold...')
@@ -287,25 +370,29 @@ class _RLforMultifirefly(animation_class.AnimationClass):
             'dw_cost_factor': self.input_env_kwargs['dw_cost_factor'],
             'w_cost_factor': self.input_env_kwargs['w_cost_factor'],
         }
-
+        
         if env.reward_boundary > self.input_env_kwargs['reward_boundary']:
             env.reward_boundary = max(
                 env.reward_boundary - 10, self.input_env_kwargs['reward_boundary'])
             self.curriculum_env_kwargs['reward_boundary'] = env.reward_boundary
             print('Updated reward_boundary to:', env.reward_boundary)
+            self._prune_or_clear_replay_buffer(keep_fraction=float(getattr(self, 'replay_keep_fraction', 0.2)))
         elif env.distance2center_cost > self.input_env_kwargs['distance2center_cost']:
             env.distance2center_cost = max(
                 env.distance2center_cost - 0.5, self.input_env_kwargs['distance2center_cost'])
             self.curriculum_env_kwargs['distance2center_cost'] = env.distance2center_cost
             print('Updated distance2center_cost to:', env.distance2center_cost)
+            self._prune_or_clear_replay_buffer(keep_fraction=float(getattr(self, 'replay_keep_fraction', 0.2)))
         elif env.angular_terminal_vel > self.input_env_kwargs['angular_terminal_vel']:
             env.angular_terminal_vel = max(env.angular_terminal_vel/2, self.input_env_kwargs['angular_terminal_vel'])
             self.curriculum_env_kwargs['angular_terminal_vel'] = env.angular_terminal_vel
             print('Updated angular_terminal_vel to:', env.angular_terminal_vel)
+            self._prune_or_clear_replay_buffer(keep_fraction=float(getattr(self, 'replay_keep_fraction', 0.2)))
         elif env.flash_on_interval > self.input_env_kwargs['flash_on_interval']:
             env.flash_on_interval = max(env.flash_on_interval - 0.3, self.input_env_kwargs['flash_on_interval'])
             self.curriculum_env_kwargs['flash_on_interval'] = env.flash_on_interval
             print('Updated flash_on_interval to:', env.flash_on_interval)
+            self._prune_or_clear_replay_buffer(keep_fraction=float(getattr(self, 'replay_keep_fraction', 0.2)))
         elif env.stop_vel_cost > self.input_env_kwargs['stop_vel_cost']:
             env.stop_vel_cost = max(env.stop_vel_cost - 50,
                                     self.input_env_kwargs['stop_vel_cost'])
@@ -342,6 +429,10 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                 setattr(self.sac_model.policy_net, 'anneal_step', int(max(0, int(current * self.std_anneal_preserve_fraction))))
             except Exception as e:
                 print('Warning: failed to reset std-anneal progress:', e)
+            print('std_anneal step before: ', current)
+            print('std_anneal step after: ', int(max(0, int(current * self.std_anneal_preserve_fraction))))
+        else:
+            print('No policy net found. No update to std_anneal step')
 
         # Softly reset SAC temperature (alpha) for auto-entropy after curriculum env change
         if hasattr(self, 'sac_model') and hasattr(self.sac_model, 'log_alpha'):
@@ -674,6 +765,24 @@ class _RLforMultifirefly(animation_class.AnimationClass):
                     best_model_postcurriculum_exists_ok=True,
                     load_replay_buffer_of_best_model_postcurriculum=True, timesteps=1000000):
 
+        # Emit run_start once per training invocation
+        try:
+            # Prefer externally provided sweep params
+            sweep_params = dict(getattr(self, 'sweep_params', {}))
+            # Add common env params if available
+            env_info = {}
+            try:
+                env_info['num_obs_ff'] = self.input_env_kwargs.get('num_obs_ff')
+                env_info['max_in_memory_time'] = self.input_env_kwargs.get('max_in_memory_time')
+                env_info['angular_terminal_vel'] = self.input_env_kwargs.get('angular_terminal_vel')
+                env_info['dt'] = self.input_env_kwargs.get('dt')
+            except Exception:
+                pass
+            sweep_params.update({k: v for k, v in env_info.items() if v is not None})
+            run_logger.log_run_start(self.overall_folder, agent_type=getattr(self, 'agent_type', 'rnn'), sweep_params=sweep_params)
+        except Exception as e:
+            print('[logger] failed to log run start from base class:', e)
+
         self.training_start_time = time_package.time()
         if not use_curriculum_training:
             print('Starting regular training')
@@ -698,6 +807,18 @@ class _RLforMultifirefly(animation_class.AnimationClass):
             self.overall_folder + 'family_of_agents_log.csv')
         # Also check if the information is in parameters_record. If not, add it.
         # self.check_and_update_parameters_record()
+
+        # Emit run_end with basic metric
+        try:
+            metrics = {}
+            try:
+                metrics['best_avg_reward'] = getattr(self, 'best_avg_reward', None)
+            except Exception:
+                pass
+            sweep_params = dict(getattr(self, 'sweep_params', {}))
+            run_logger.log_run_end(self.overall_folder, agent_type=getattr(self, 'agent_type', 'rnn'), sweep_params=sweep_params, status='finished', metrics=metrics)
+        except Exception as e:
+            print('[logger] failed to log run end from base class:', e)
 
     def _evaluate_model_and_retrain_if_necessary(self, use_curriculum_training=False):
 

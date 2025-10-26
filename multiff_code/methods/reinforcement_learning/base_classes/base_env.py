@@ -422,7 +422,7 @@ class MultiFF(gymnasium.Env):
         # calculate the change in the agent's position in one time step
         ah = self.agentheading
         v = self.v
-        print('v: ', v)
+        #print('v: ', v)
         self.dx = np.cos(ah) * v
         self.dy = np.sin(ah) * v
         # update the position and direction of the agent

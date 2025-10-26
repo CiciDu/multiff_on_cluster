@@ -365,7 +365,7 @@ class SAC_PolicyNetworkLSTM(PolicyNetworkBase):
         self.hidden_size = hidden_size
         # Exploration std annealing is driven by policy-local anneal step via set_anneal_step
         self.anneal_step = 0
-        self.std_anneal_min = 0.1
+        self.std_anneal_min = 1.0
         self.std_anneal_max = 1.0
         self.std_anneal_steps = 1000000
 
@@ -491,6 +491,9 @@ class LSTM_SAC_Trainer():
         self.seq_len = kwargs.get('seq_len', None)
         self.burn_in = kwargs.get('burn_in', 0)
         self.device = kwargs.get('device', "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),)
+        # Alpha (entropy temperature) clipping bounds
+        self.alpha_min = kwargs.get('alpha_min', 1e-3)
+        self.alpha_max = kwargs.get('alpha_max', 4.0)
 
         state_space = kwargs.get('state_space')
         action_space = kwargs.get('action_space')
@@ -603,9 +606,13 @@ class LSTM_SAC_Trainer():
             # Clamp temperature to avoid runaway
             with torch.no_grad():
                 self.log_alpha.clamp_(min=-10.0, max=10.0)
-            self.alpha = self.log_alpha.exp()
+            # Compute alpha from log_alpha and clip to configured bounds
+            self.alpha = self.log_alpha.exp().detach()
+            self.alpha.clamp_(min=self.alpha_min, max=self.alpha_max)
         else:
-            self.alpha = 1.0
+            # Ensure alpha is a tensor on device and clipped
+            self.alpha = torch.as_tensor(1.0, device=self.device, dtype=torch.float32)
+            self.alpha.clamp_(min=self.alpha_min, max=self.alpha_max)
             alpha_loss = 0
 
         # Compute target Q-values
@@ -700,11 +707,16 @@ class LSTM_SAC_Trainer():
                     except Exception:
                         pass
                 # Ensure runtime alpha reflects restored log_alpha
-                self.alpha = self.log_alpha.exp()
+                self.alpha = self.log_alpha.exp().detach()
+                self.alpha.clamp_(min=self.alpha_min, max=self.alpha_max)
                 print('Loaded alpha while loading model')
         except Exception:
             # If restore fails, fall back to current initialization
-            self.alpha = getattr(self, 'alpha', self.log_alpha.exp())
+            fallback_alpha = getattr(self, 'alpha', self.log_alpha.exp().detach())
+            if not torch.is_tensor(fallback_alpha):
+                fallback_alpha = torch.as_tensor(fallback_alpha, device=self.device, dtype=torch.float32)
+            self.alpha = fallback_alpha
+            self.alpha.clamp_(min=self.alpha_min, max=self.alpha_max)
             print('Failed to load alpha while loading model')
 
 def plot(rewards):

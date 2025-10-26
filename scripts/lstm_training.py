@@ -14,6 +14,14 @@ from gymnasium import spaces, Env
 import pickle
 import numpy as np
 import torch
+import sys
+from pathlib import Path
+import os
+for p in [Path.cwd()] + list(Path.cwd().parents):
+    if p.name == 'Multifirefly-Project':
+        os.chdir(p)
+        sys.path.insert(0, str(p / 'multiff_analysis/multiff_code/methods'))
+        break
 from decision_making_analysis.compare_GUAT_and_TAFT import find_GUAT_or_TAFT_trials
 from neural_data_analysis.neural_analysis_tools.model_neural_data import neural_data_modeling
 from eye_position_analysis import eye_positions
@@ -31,15 +39,6 @@ from decision_making_analysis.decision_making import decision_making_utils, plot
 from decision_making_analysis.cluster_replacement import cluster_replacement_utils, plot_cluster_replacement
 from pattern_discovery import pattern_by_trials, pattern_by_points, make_ff_dataframe, ff_dataframe_utils, pattern_by_trials, pattern_by_points, cluster_analysis, organize_patterns_and_features, category_class
 from data_wrangling import specific_utils, process_monkey_information, base_processing_class
-import sys
-from pathlib import Path
-import os
-import sys
-for p in [Path.cwd()] + list(Path.cwd().parents):
-    if p.name == 'Multifirefly-Project':
-        os.chdir(p)
-        sys.path.insert(0, str(p / 'multiff_analysis/multiff_code/methods'))
-        break
 
 
 os.environ.setdefault("PYTORCH_DISABLE_DYNAMO", "1")

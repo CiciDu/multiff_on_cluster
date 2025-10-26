@@ -29,8 +29,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                  model_folder_name=None,
                  add_date_to_model_folder_name=False,
                  max_in_memory_time=1,
-                 seq_len=None,
-                 burn_in=0,
+                 seq_len=192,
+                 burn_in=64,
                  **additional_env_kwargs):
 
         super().__init__(overall_folder,
@@ -75,7 +75,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             "action_space": self.env.action_space,
             "action_dim": self.env.action_space.shape[0],
             "action_range": 1.0,
-            "replay_buffer_size": kwargs.get('replay_buffer_size', 500),
+            "replay_buffer_size": kwargs.get('replay_buffer_size', 1000),
             "hidden_dim": kwargs.get('hidden_dim', 256),
             "soft_q_lr": kwargs.get('soft_q_lr', 0.0015),
             "policy_lr": kwargs.get('policy_lr', 0.003),
@@ -115,7 +115,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
     def _make_agent_for_curriculum_training(self):
         self.make_agent()
 
-    def _use_while_loop_for_curriculum_training(self, eval_eps_freq=20, num_eval_episodes=2, max_curriculum_stages=10):
+    def _use_while_loop_for_curriculum_training(self, eval_eps_freq=20, num_eval_episodes=2):
         stage = 0
         finished_curriculum = False
         log_path = os.path.join(self.best_model_in_curriculum_dir, 'curriculum_log.csv')
@@ -128,6 +128,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             'dv_cost_factor', 'dw_cost_factor', 'w_cost_factor',
             'finished_curriculum'
         ]
+        # Ensure parent directory exists before attempting to write
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
         if not os.path.exists(log_path):
             pd.DataFrame(columns=columns).to_csv(log_path, index=False)
 
@@ -148,6 +150,32 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             # --- Check progress ---
             if self.best_avg_reward < reward_threshold:
                 print(f'[Stage {stage}] Warning: best reward {self.best_avg_reward:.2f} < threshold {reward_threshold:.2f}. Retrying...')
+                # Log failed attempt as a curriculum stage attempt
+                failed_payload = {
+                    'stage': stage,
+                    'reward_threshold': reward_threshold,
+                    'best_avg_reward': self.best_avg_reward,
+                    'flash_on_interval': self.env.flash_on_interval,
+                    'angular_terminal_vel': self.env.angular_terminal_vel,
+                    'reward_boundary': self.env.reward_boundary,
+                    'distance2center_cost': self.env.distance2center_cost,
+                    'stop_vel_cost': self.env.stop_vel_cost,
+                    'dv_cost_factor': self.env.dv_cost_factor,
+                    'dw_cost_factor': self.env.dw_cost_factor,
+                    'w_cost_factor': self.env.w_cost_factor,
+                    'finished_curriculum': False,
+                    'attempt_passed': False,
+                }
+                try:
+                    # Append to per-agent CSV
+                    pd.DataFrame([failed_payload]).to_csv(log_path, mode='a', header=False, index=False)
+                except Exception:
+                    pass
+                try:
+                    sweep_params = getattr(self, 'sweep_params', {})
+                    run_logger.log_curriculum_stage(self.overall_folder, agent_type=getattr(self, 'agent_type', 'rnn'), sweep_params=sweep_params, stage_payload=failed_payload)
+                except Exception as e:
+                    print('[logger] failed to log failed curriculum attempt:', e)
                 continue
 
             print(f'[Stage {stage}] Progressed: best reward {self.best_avg_reward:.2f} ≥ threshold {reward_threshold:.2f}')
@@ -165,7 +193,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                 'dv_cost_factor': self.env.dv_cost_factor,
                 'dw_cost_factor': self.env.dw_cost_factor,
                 'w_cost_factor': self.env.w_cost_factor,
-                'finished_curriculum': finished_curriculum
+                'finished_curriculum': finished_curriculum,
+                'attempt_passed': True,
             }
             # Per-agent CSV for backward compatibility
             try:
@@ -200,13 +229,10 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                 print(f'[Stage {stage}] All curriculum conditions met — running one more stage before exit.')
                 finished_curriculum = True
 
-            if stage >= max_curriculum_stages:
-                raise RuntimeError('Curriculum did not converge within the maximum allowed stages.')
-
         # --- Final post-curriculum training ---
         os.makedirs(self.best_model_postcurriculum_dir, exist_ok=True)
         self.make_env(**self.input_env_kwargs)
-        self.load_best_model_in_curriculum(load_replay_buffer=True)
+        self.load_best_model_in_curriculum(load_replay_buffer=False)
 
         reward_threshold = rl_base_utils.calculate_reward_threshold_for_curriculum_training(
             self.env, n_eval_episodes=num_eval_episodes, ff_caught_rate_threshold=0.1)
@@ -268,7 +294,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             # Reconstruct ReplayBufferLSTM2 from saved list
             if isinstance(loaded_buffer_list, list):
                 capacity = max(self.agent_params.get(
-                    'replay_buffer_size', 500), len(loaded_buffer_list))
+                    'replay_buffer_size', 1000), len(loaded_buffer_list))
                 rb = self.replay_buffer_class(capacity)
                 rb.buffer = loaded_buffer_list
                 rb.position = len(loaded_buffer_list) % capacity
@@ -297,7 +323,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
         super().make_animation(max_num_frames=None, **kwargs)
 
     def regular_training(self, num_train_episodes=10000, eval_eps_freq=15, num_eval_episodes=2,
-                         print_episode_reward=True, reward_threshold_to_stop_on=None, dir_name=None):
+                         print_episode_reward=True, reward_threshold_to_stop_on=None, dir_name=None,
+                         min_train_episodes_before_early_stop=100):
         max_steps_per_eps = self.env.episode_len
 
         self.train_rnn_agent(
@@ -309,6 +336,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
             print_episode_reward=print_episode_reward,
             reward_threshold_to_stop_on=reward_threshold_to_stop_on,
             dir_name=dir_name,
+            min_train_episodes_before_early_stop=min_train_episodes_before_early_stop,
         )
         if dir_name is not None:
             self.write_checkpoint_manifest(dir_name)
@@ -318,7 +346,8 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                            num_train_episodes=10000, eval_eps_freq=15, max_steps_per_eps=512,
                            num_eval_episodes=2, print_episode_reward=False,
                            reward_threshold_to_stop_on=None, dir_name=None,
-                           track_alpha=False, save_fn=None):
+                           track_alpha=False, save_fn=None,
+                           min_train_episodes_before_early_stop=100):
         """
         Shared training loop for RNN agents (LSTM/GRU variants).
         """
@@ -362,7 +391,7 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                     f"Best average evaluation reward: {self.best_avg_reward}")
 
                 self.eval_rewards.append(avg_reward)
-                print('Last 10 evaluation rewards:', self.eval_rewards[-10:])
+                print('Last 10 evaluation rewards (most recent first):', self.eval_rewards[-1:-11:-1])
                 if len(self.eval_rewards) > 100:
                     self.eval_rewards = self.eval_rewards[-100:]
 
@@ -375,9 +404,13 @@ class LSTMforMultifirefly(rl_base_class._RLforMultifirefly):
                         print(f"New best model saved to {dir_name}")
                     print(f"New best average reward: {self.best_avg_reward}")
 
-                    if reward_threshold_to_stop_on is not None and \
-                            self.best_avg_reward >= reward_threshold_to_stop_on:
+                if reward_threshold_to_stop_on is not None and \
+                        avg_reward >= reward_threshold_to_stop_on:
+                    if eps >= min_train_episodes_before_early_stop:
+                        print(f"Reward threshold met by current evaluation: {avg_reward} >= {reward_threshold_to_stop_on} (eps={eps} ≥ min={min_train_episodes_before_early_stop})")
                         break
+                    else:
+                        print(f"Reward threshold met but minimum episodes not reached yet: eps={eps} < min={min_train_episodes_before_early_stop}. Continuing training.")
 
             if print_episode_reward:
                 print(f'Episode: {eps}, Episode Reward: {episode_reward}')
